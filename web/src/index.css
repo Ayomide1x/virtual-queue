@@ -1,0 +1,56 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+    -webkit-tap-highlight-color: transparent;
+  }
+  body {
+    @apply bg-muted-lightest font-sans text-ink antialiased;
+  }
+  :focus-visible {
+    @apply outline outline-4 outline-offset-2 outline-focus;
+  }
+}
+
+@layer components {
+  .btn {
+    @apply inline-flex min-h-[48px] select-none items-center justify-center gap-2 rounded-md px-5 py-3 text-base font-bold leading-tight transition-colors disabled:cursor-not-allowed disabled:opacity-45;
+  }
+  .btn-primary {
+    @apply btn bg-primary text-white hover:bg-primary-dark active:bg-navy-900;
+  }
+  .btn-success {
+    @apply btn bg-success-dark text-white hover:bg-success-darker;
+  }
+  .btn-outline {
+    @apply btn border-2 border-primary bg-white text-primary hover:bg-primary-lighter;
+  }
+  .btn-danger-outline {
+    @apply btn border-2 border-danger-dark bg-white text-danger-dark hover:bg-danger-light;
+  }
+  .btn-secondary {
+    @apply btn border-2 border-muted-light bg-white text-ink hover:bg-muted-lightest;
+  }
+  .card {
+    @apply rounded-lg border border-muted-lighter bg-white shadow-sm;
+  }
+  .label {
+    @apply text-sm font-semibold uppercase tracking-wide text-muted;
+  }
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

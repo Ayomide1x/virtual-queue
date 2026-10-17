@@ -1,0 +1,37 @@
+services:
+  redis:
+    image: redis:7-alpine
+    # Append-only file + volume: the queue survives restarts of either container.
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  app:
+    build: .
+    ports:
+      - "${PORT:-3000}:3000"
+    environment:
+      REDIS_URL: redis://redis:6379
+      PORT: "3000"
+      HOST: 0.0.0.0
+      # Your computer's LAN IP, so the lobby QR code works for phones on the same Wi-Fi.
+      # ./scripts/up.sh fills this in automatically.
+      HOST_IP: ${HOST_IP:-}
+      PUBLIC_PORT: ${PORT:-3000}
+      COUNTERS: ${COUNTERS:-6}
+      # Populate the queue with sample residents on first start (if-empty | always | never).
+      SEED_ON_START: ${SEED_ON_START:-if-empty}
+      TZ: ${TZ:-UTC}
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  redis-data:
