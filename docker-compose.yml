@@ -20,13 +20,26 @@ services:
       REDIS_URL: redis://redis:6379
       PORT: "3000"
       HOST: 0.0.0.0
-      # Your computer's LAN IP, so the lobby QR code works for phones on the same Wi-Fi.
-      # ./scripts/up.sh fills this in automatically.
+      # Base URL phones use to reach the app (lobby QR codes and share links).
+      # ./scripts/up.sh fills this in with your LAN address automatically.
+      PUBLIC_URL: ${PUBLIC_URL:-}
       HOST_IP: ${HOST_IP:-}
       PUBLIC_PORT: ${PORT:-3000}
-      COUNTERS: ${COUNTERS:-6}
-      # Populate the queue with sample residents on first start (if-empty | always | never).
-      SEED_ON_START: ${SEED_ON_START:-if-empty}
+      # Offices and all their data expire after this many days without activity.
+      OFFICE_TTL_DAYS: ${OFFICE_TTL_DAYS:-30}
+      # Per-IP limits, as requests/seconds.
+      RATE_LIMIT_CREATE_OFFICE: ${RATE_LIMIT_CREATE_OFFICE:-10/3600}
+      RATE_LIMIT_JOIN: ${RATE_LIMIT_JOIN:-30/60}
+      # Set when running behind a reverse proxy so rate limits see real client IPs (e.g. 1).
+      TRUST_PROXY: ${TRUST_PROXY:-}
+      # Alerts (optional). `npm run setup:alerts` writes VAPID keys to .env, which compose reads.
+      VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY:-}
+      VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
+      VAPID_SUBJECT: ${VAPID_SUBJECT:-mailto:admin@example.com}
+      # Email fallback via Resend's free tier; without a key, emails are only logged (addresses masked).
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      EMAIL_FROM: ${EMAIL_FROM:-Virtual Queue <onboarding@resend.dev>}
+      RATE_LIMIT_NOTIFY: ${RATE_LIMIT_NOTIFY:-20/600}
       TZ: ${TZ:-UTC}
     depends_on:
       redis:

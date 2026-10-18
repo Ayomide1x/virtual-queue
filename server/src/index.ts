@@ -1,9 +1,10 @@
 import Redis from 'ioredis';
+import { AlertService } from './alerts/service';
+import { DisabledPushSender, LogEmailSender, ResendEmailSender, WebPushSender } from './alerts/senders';
 import { createApp } from './app';
 import { config } from './config';
 import { getLanIp, runningInDocker } from './network';
-import { QueueStore } from './queueStore';
-import { seedDemo } from './seed';
+import { OfficeStore } from './offices';
 
 async function main() {
   const redisOpts = { retryStrategy: (times: number) => Math.min(times * 250, 3000) };
@@ -13,37 +14,44 @@ async function main() {
     conn.on('error', (err) => console.error(`[${label}] ${err.message}`));
   }
 
-  const store = new QueueStore(redis, { counters: config.counters });
-
-  if (config.seedOnStart !== 'never') {
-    const state = await store.getStaffState();
-    const empty = state.totals.waiting === 0 && state.totals.servedToday === 0;
-    if (config.seedOnStart === 'always' || empty) {
-      await seedDemo(redis, { counters: config.counters });
-      console.log('Seeded demo data.');
-    }
-  }
-
+  const offices = new OfficeStore(redis, { ttlSec: config.officeTtlSec });
   const lanIp = getLanIp(config.hostIp);
+  const a = config.alerts;
+  const alerts = new AlertService({
+    redis,
+    offices,
+    push: a.vapidPublicKey && a.vapidPrivateKey ? new WebPushSender(a.vapidPublicKey, a.vapidPrivateKey, a.vapidSubject) : new DisabledPushSender(),
+    email: a.resendApiKey ? new ResendEmailSender(a.resendApiKey, a.emailFrom) : new LogEmailSender(),
+    baseUrl: config.publicUrl ?? (lanIp ? `http://${lanIp}:${config.publicPort}` : `http://localhost:${config.publicPort}`),
+  });
+  alerts.start();
   const { server } = createApp({
+    alerts,
     redis,
     subscriber,
-    store,
+    offices,
+    publicUrl: config.publicUrl,
     lanIp,
-    publicJoinUrl: config.publicJoinUrl,
     webDist: config.webDist,
+    rateLimits: config.rateLimits,
+    trustProxy: config.trustProxy,
   });
 
   server.listen(config.port, config.host, () => {
+    const base = config.publicUrl ?? (lanIp ? `http://${lanIp}:${config.publicPort}` : `http://localhost:${config.publicPort}`);
     console.log(`Virtual queue server listening on http://${config.host}:${config.port}`);
-    if (lanIp) console.log(`On your network:  http://${lanIp}:${config.publicPort}`);
-    else if (runningInDocker()) {
-      console.warn('HOST_IP is not set, so the lobby QR code cannot know your LAN address.');
-      console.warn('Start with: HOST_IP=$(ipconfig getifaddr en0) docker compose up   (or ./scripts/up.sh)');
+    console.log(`Open ${base} and click "Create an office" (or run: npm run office -- create --seed)`);
+    console.log(
+      `Alerts: push ${alerts.push.enabled ? 'on' : 'off (run npm run setup:alerts)'}, email ${alerts.email.mode === 'resend' ? 'via Resend' : 'logged only (set RESEND_API_KEY)'}`,
+    );
+    if (!config.publicUrl && !lanIp && runningInDocker()) {
+      console.warn('PUBLIC_URL is not set, so lobby QR codes cannot point at your LAN address.');
+      console.warn('Start with ./scripts/up.sh, or: PUBLIC_URL=http://$(ipconfig getifaddr en0):3000 docker compose up');
     }
   });
 
   const shutdown = () => {
+    alerts.stop();
     server.close();
     void Promise.allSettled([redis.quit(), subscriber.quit()]).then(() => process.exit(0));
     setTimeout(() => process.exit(0), 3000).unref();

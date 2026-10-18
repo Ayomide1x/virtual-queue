@@ -11,8 +11,9 @@
     "build": "npm run build -w web && npm run build -w server",
     "start": "npm run start -w server",
     "test": "npm test -w server",
-    "seed": "npm run seed -w server",
-    "typecheck": "npm run typecheck -w server && npm run typecheck -w web"
+    "typecheck": "npm run typecheck -w server && npm run typecheck -w web",
+    "office": "npm run office -w server --",
+    "setup:alerts": "npm run setup:alerts -w server --"
   },
   "devDependencies": {
     "concurrently": "^9.1.0"

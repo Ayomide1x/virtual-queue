@@ -11,17 +11,27 @@ export function Seal({ className = 'h-9 w-9' }: { className?: string }) {
   );
 }
 
-export function Header({ title, children }: { title?: string; children?: ReactNode }) {
+/** Top bar. `office` is the office name; omit it for app-level pages. */
+export function Header({ title, office, children }: { title: string; office?: string; children?: ReactNode }) {
+  const brand = (
+    <>
+      <Seal />
+      <div className="min-w-0 leading-tight">
+        <div className="truncate text-xs font-semibold uppercase tracking-wider text-primary-light">{office ?? 'Virtual Queue'}</div>
+        <div className="truncate text-lg font-bold">{title}</div>
+      </div>
+    </>
+  );
   return (
     <header className="bg-navy-900 text-white">
       <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-4 py-3 sm:px-6">
-        <Link to="/" className="flex items-center gap-3 rounded focus-visible:outline-white">
-          <Seal />
-          <div className="leading-tight">
-            <div className="text-xs font-semibold uppercase tracking-wider text-primary-light">City of Riverside</div>
-            <div className="text-lg font-bold">{title ?? 'City Services Office'}</div>
-          </div>
-        </Link>
+        {office ? (
+          <div className="flex min-w-0 items-center gap-3">{brand}</div>
+        ) : (
+          <Link to="/" className="flex min-w-0 items-center gap-3 rounded focus-visible:outline-white">
+            {brand}
+          </Link>
+        )}
         {children}
       </div>
     </header>

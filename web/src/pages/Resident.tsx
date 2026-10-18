@@ -1,46 +1,91 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { AlertsOptIn } from '../components/AlertsOptIn';
 import { ConnectionBanner } from '../components/ConnectionStatus';
 import { Header } from '../components/Header';
-import { ServiceIcon } from '../components/ServiceIcon';
-import { ApiError, api } from '../lib/api';
-import { formatEstimate } from '../lib/format';
+import { OfficeGate } from '../components/OfficeGate';
+import { ServiceBadge } from '../components/ServiceBadge';
+import { ApiError, officeApi } from '../lib/api';
+import { Link } from 'react-router-dom';
+import { formatClock, formatRange } from '../lib/format';
 import { useChannel } from '../lib/socket';
 import { audioUnlocked, playChime, unlockAudio, vibrate } from '../lib/sound';
-import type { LobbyState, ServiceId, TicketView } from '../types';
+import { useOfficeManifest } from '../lib/pwa';
+import { useOfficeId } from '../lib/useOffice';
+import { useTitle } from '../lib/useTitle';
+import type { LobbyState, OfficeInfo, TicketView } from '../types';
 
-const STORAGE_KEY = 'vq.ticketId';
+/** The resident's ticket for each office is kept on this device. */
+function ticketStorage(officeId: string) {
+  const key = `vq.ticket.${officeId}`;
+  return {
+    get: () => {
+      try {
+        return localStorage.getItem(key);
+      } catch {
+        return null;
+      }
+    },
+    set: (id: string) => {
+      try {
+        localStorage.setItem(key, id);
+      } catch {
+        /* private mode: ticket just won't survive a refresh */
+      }
+    },
+    clear: () => {
+      try {
+        localStorage.removeItem(key);
+      } catch {
+        /* ignore */
+      }
+    },
+  };
+}
 
-const storage = {
-  get: () => {
-    try {
-      return localStorage.getItem(STORAGE_KEY);
-    } catch {
-      return null;
-    }
-  },
-  set: (id: string) => {
-    try {
-      localStorage.setItem(STORAGE_KEY, id);
-    } catch {
-      /* private mode: ticket just won't survive a refresh */
-    }
-  },
-  clear: () => {
-    try {
-      localStorage.removeItem(STORAGE_KEY);
-    } catch {
-      /* ignore */
-    }
-  },
-};
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/**
+ * Pick up a ticket passed in the URL (?ticket=…), e.g. when the installed home
+ * screen app opens for the first time — iOS gives it separate storage. A ticket
+ * already on this device wins: the app's start URL keeps its first ticket forever.
+ */
+function adoptTicketFromUrl(officeId: string) {
+  const id = new URLSearchParams(window.location.search).get('ticket');
+  const storage = ticketStorage(officeId);
+  if (id && UUID.test(id) && !storage.get()) storage.set(id);
+}
 
 export default function Resident() {
+  const officeId = useOfficeId();
+  useState(() => adoptTicketFromUrl(officeId));
+  return (
+    <OfficeGate officeId={officeId}>
+      {(data) => <ResidentScreen key={officeId} officeId={officeId} initialOffice={data.office} />}
+    </OfficeGate>
+  );
+}
+
+function ResidentScreen({ officeId, initialOffice }: { officeId: string; initialOffice: OfficeInfo }) {
+  const storage = ticketStorage(officeId);
+  const api = officeApi(officeId);
+  const { data: lobby } = useChannel<LobbyState>({ officeId, role: 'lobby' }, 'lobby:state');
+  const office = lobby?.office ?? initialOffice;
+  useTitle(`Join the line — ${office.name}`);
   const [ticketId, setTicketId] = useState<string | null>(storage.get);
+  // "Add to Home Screen" opens this office, with this ticket.
+  useOfficeManifest(officeId, ticketId ? `/o/${officeId}/join?ticket=${ticketId}` : undefined);
+  // Keep the ticket in the address bar too: iOS saves this URL on "Add to Home Screen".
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    if (ticketId) url.searchParams.set('ticket', ticketId);
+    else url.searchParams.delete('ticket');
+    window.history.replaceState(window.history.state, '', url.pathname + url.search + url.hash);
+  }, [ticketId]);
   const [joinedView, setJoinedView] = useState<TicketView | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
-  const live = useChannel<{ id: string; view: TicketView | null; serverNow?: number }>(
-    ticketId ? { role: 'ticket', ticketId } : null,
+  const { data: live } = useChannel<{ officeId: string; id: string; view: TicketView | null; serverNow?: number }>(
+    ticketId ? { officeId, role: 'ticket', ticketId } : null,
     'ticket:update',
     (d) => d.id === ticketId,
   );
@@ -79,13 +124,13 @@ export default function Resident() {
 
   return (
     <div className={`flex min-h-screen flex-col ${status === 'called' ? 'bg-success-darker' : ''}`}>
-      <Header title="Virtual Queue" />
+      <Header title="Virtual Queue" office={office.name} />
       <ConnectionBanner />
       <main className="mx-auto w-full max-w-md flex-1 px-4 pb-10 pt-6">
-        {!ticketId && <JoinForm onJoined={onJoined} notice={notice} />}
+        {!ticketId && (office.status.open ? <JoinForm api={api} lobby={lobby} office={office} onJoined={onJoined} notice={notice} /> : <Closed office={office} notice={notice} />)}
         {ticketId && !view && <LoadingTicket />}
-        {view && status === 'waiting' && <Waiting view={view} onLeft={() => forget('You have left the line.')} />}
-        {view && status === 'called' && <Called view={view} onLeft={() => forget('You have left the line.')} />}
+        {view && status === 'waiting' && <Waiting api={api} view={view} onLeft={() => forget('You have left the line.')} />}
+        {view && status === 'called' && <Called api={api} view={view} onLeft={() => forget('You have left the line.')} />}
         {view && (status === 'served' || status === 'no_show') && <Finished view={view} onDone={() => forget(null)} />}
       </main>
     </div>
@@ -103,10 +148,46 @@ function LoadingTicket() {
 
 // ---------------------------------------------------------------------- join
 
-function JoinForm({ onJoined, notice }: { onJoined: (v: TicketView) => void; notice: string | null }) {
-  const lobby = useChannel<LobbyState>({ role: 'lobby' }, 'lobby:state');
+type Api = ReturnType<typeof officeApi>;
+
+function Closed({ office, notice }: { office: OfficeInfo; notice: string | null }) {
+  return (
+    <div className="animate-fade-in space-y-6">
+      {notice && (
+        <div role="status" className="rounded-md border-l-8 border-primary bg-primary-lighter p-4">
+          {notice}
+        </div>
+      )}
+      <div className="card p-6 text-center" role="status">
+        <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-muted-lightest text-navy-900">
+          <svg viewBox="0 0 24 24" className="h-9 w-9" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="9" />
+            <path d="M12 7v5l3 2" />
+          </svg>
+        </div>
+        <h1 className="text-3xl font-extrabold text-navy-900">The line is closed</h1>
+        <p className="mt-3 text-lg text-muted">{office.status.message ?? 'Joining is closed right now.'}</p>
+        <p className="mt-3 text-muted">This page will open automatically when the line reopens.</p>
+      </div>
+    </div>
+  );
+}
+
+function JoinForm({
+  api,
+  lobby,
+  office,
+  onJoined,
+  notice,
+}: {
+  api: Api;
+  lobby: LobbyState | null;
+  office: OfficeInfo;
+  onJoined: (v: TicketView) => void;
+  notice: string | null;
+}) {
   const [name, setName] = useState('');
-  const [service, setService] = useState<ServiceId | null>(null);
+  const [service, setService] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const nameRef = useRef<HTMLInputElement>(null);
@@ -172,7 +253,7 @@ function JoinForm({ onJoined, notice }: { onJoined: (v: TicketView) => void; not
       <fieldset>
         <legend className="mb-2 text-lg font-bold">What do you need help with?</legend>
         <div className="space-y-3">
-          {DEFAULT_SERVICES.map(({ id, name }) => {
+          {office.services.map(({ id, name, code }) => {
             const s = lobby?.services.find((x) => x.id === id);
             const selected = service === id;
             return (
@@ -190,16 +271,14 @@ function JoinForm({ onJoined, notice }: { onJoined: (v: TicketView) => void; not
                   onChange={() => setService(id)}
                   className="sr-only"
                 />
-                <span className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-full ${selected ? 'bg-primary text-white' : 'bg-primary-lighter text-primary'}`}>
-                  <ServiceIcon service={id} className="h-7 w-7" />
-                </span>
+                <ServiceBadge code={code} size="lg" tone={selected ? 'solid' : 'light'} />
                 <span className="flex-1">
                   <span className="block text-lg font-bold">{name}</span>
                   <span className="block text-sm text-muted">
                     {s
                       ? s.paused
                         ? 'Temporarily paused — you can still join'
-                        : `${s.waitingCount} waiting · ${s.waitingCount === 0 ? 'No wait' : formatEstimate(s.estimatedWaitSec).toLowerCase()}`
+                        : `${s.waitingCount} waiting · ${s.waitingCount === 0 ? 'No wait' : `${formatRange(s.estimate)} wait`}`
                       : ' '}
                   </span>
                 </span>
@@ -224,17 +303,36 @@ function JoinForm({ onJoined, notice }: { onJoined: (v: TicketView) => void; not
       <button type="submit" className="btn-primary w-full min-h-[60px] text-xl" disabled={submitting}>
         {submitting ? 'Getting your ticket…' : 'Get my ticket'}
       </button>
+      {office.appointments.enabled && <AppointmentLinks officeId={api.officeId} />}
     </form>
   );
 }
 
-const DEFAULT_SERVICES: Array<{ id: ServiceId; name: string }> = [
-  { id: 'license', name: "Driver's License" },
-  { id: 'registration', name: 'Vehicle Registration' },
-  { id: 'id', name: 'ID Card' },
-];
-
-const serviceName = (id: ServiceId) => DEFAULT_SERVICES.find((s) => s.id === id)?.name ?? id;
+/** "Book an appointment" link, plus a shortcut to an appointment booked on this device. */
+function AppointmentLinks({ officeId }: { officeId: string }) {
+  const saved = (() => {
+    try {
+      return localStorage.getItem(`vq.appointment.${officeId}`);
+    } catch {
+      return null;
+    }
+  })();
+  return (
+    <div className="rounded-md border border-muted-lighter bg-white p-4 text-center">
+      <p className="text-muted">Prefer a set time?</p>
+      <div className="mt-2 flex flex-wrap justify-center gap-x-6 gap-y-2">
+        <Link to={`/o/${officeId}/book`} className="font-bold text-primary underline underline-offset-4">
+          Book an appointment
+        </Link>
+        {saved && (
+          <Link to={`/o/${officeId}/appointment/${saved}`} className="font-bold text-primary underline underline-offset-4">
+            View my appointment
+          </Link>
+        )}
+      </div>
+    </div>
+  );
+}
 
 // ------------------------------------------------------------------- waiting
 
@@ -245,16 +343,25 @@ function TicketNumber({ view, tone = 'light' }: { view: TicketView; tone?: 'ligh
       <div className={`tabular mt-1 text-7xl font-extrabold tracking-tight ${tone === 'dark' ? 'text-white' : 'text-navy-900'}`}>
         {view.ticket.number}
       </div>
-      <div className={`mt-1 flex items-center justify-center gap-2 text-lg ${tone === 'dark' ? 'text-white' : 'text-muted'}`}>
-        <ServiceIcon service={view.ticket.service} className="h-5 w-5" />
-        {serviceName(view.ticket.service)}
-      </div>
+      <div className={`mt-1 text-lg ${tone === 'dark' ? 'text-white' : 'text-muted'}`}>{view.serviceName}</div>
+      {(view.ticket.priority || view.ticket.kind === 'appointment') && (
+        <div className="mt-3 flex flex-wrap justify-center gap-2">
+          {view.ticket.priority && (
+            <span className={`rounded-full px-3 py-1 text-sm font-bold ${tone === 'dark' ? 'bg-white/15 text-white' : 'bg-navy-900 text-white'}`}>Priority service</span>
+          )}
+          {view.ticket.kind === 'appointment' && view.ticket.appointmentAt && (
+            <span className={`rounded-full px-3 py-1 text-sm font-bold ${tone === 'dark' ? 'bg-white/15 text-white' : 'bg-primary-light text-navy-900'}`}>
+              Appointment · {formatClock(view.ticket.appointmentAt)}
+            </span>
+          )}
+        </div>
+      )}
     </div>
   );
 }
 
-function Waiting({ view, onLeft }: { view: TicketView; onLeft: () => void }) {
-  const { ahead, position, estimatedWaitSec } = view;
+function Waiting({ api, view, onLeft }: { api: Api; view: TicketView; onLeft: () => void }) {
+  const { ahead, position, estimate } = view;
   const [soundOn, setSoundOn] = useState(audioUnlocked());
 
   return (
@@ -279,12 +386,14 @@ function Waiting({ view, onLeft }: { view: TicketView; onLeft: () => void }) {
           <div className="p-5 text-center">
             <dt className="label">Estimated wait</dt>
             <dd className="mt-1 text-2xl font-extrabold leading-10 text-navy-900">
-              {ahead === 0 ? 'Any moment' : formatEstimate(estimatedWaitSec).replace('About ', '~')}
+              {ahead === 0 ? 'Any moment' : formatRange(estimate).replace('About ', '~')}
             </dd>
-            <dd className="text-sm text-muted">updates live</dd>
+            <dd className="text-sm text-muted">{ahead === 0 ? 'updates live' : 'likely range · updates live'}</dd>
           </div>
         </dl>
       </section>
+
+      <AlertsOptIn officeId={api.officeId} target={{ kind: 'ticket', id: view.ticket.id }} />
 
       {view.servicePaused && (
         <div role="status" className="rounded-md border-l-8 border-warning bg-warning-light p-4">
@@ -295,7 +404,7 @@ function Waiting({ view, onLeft }: { view: TicketView; onLeft: () => void }) {
 
       <div className="rounded-md bg-white p-4 text-muted">
         <p>
-          <strong className="text-ink">Keep this page open.</strong> Your phone will chime when it’s your turn. You can safely refresh — your
+          <strong className="text-ink">Keep this page open</strong> (or turn on alerts above). Your phone will chime when it’s your turn. You can safely refresh — your
           ticket is saved on this device.
         </p>
         {!soundOn && (
@@ -313,7 +422,7 @@ function Waiting({ view, onLeft }: { view: TicketView; onLeft: () => void }) {
         )}
       </div>
 
-      <LeaveButton ticketId={view.ticket.id} onLeft={onLeft} />
+      <LeaveButton api={api} ticketId={view.ticket.id} onLeft={onLeft} />
     </div>
   );
 }
@@ -326,7 +435,7 @@ function SpeakerIcon() {
   );
 }
 
-function LeaveButton({ ticketId, onLeft, tone = 'light' }: { ticketId: string; onLeft: () => void; tone?: 'light' | 'dark' }) {
+function LeaveButton({ api, ticketId, onLeft, tone = 'light' }: { api: Api; ticketId: string; onLeft: () => void; tone?: 'light' | 'dark' }) {
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -378,7 +487,7 @@ function LeaveButton({ ticketId, onLeft, tone = 'light' }: { ticketId: string; o
 
 // -------------------------------------------------------------------- called
 
-function Called({ view, onLeft }: { view: TicketView; onLeft: () => void }) {
+function Called({ api, view, onLeft }: { api: Api; view: TicketView; onLeft: () => void }) {
   const alerted = useRef<string | null>(null);
   const [soundOn, setSoundOn] = useState(audioUnlocked());
   const headingRef = useRef<HTMLHeadingElement>(null);
@@ -418,7 +527,7 @@ function Called({ view, onLeft }: { view: TicketView; onLeft: () => void }) {
           It’s your turn
         </h1>
         <p className="mt-3 text-2xl">Please go to</p>
-        <p className="mt-1 text-6xl font-extrabold">Counter {view.ticket.counter}</p>
+        <p className="mt-1 break-words text-6xl font-extrabold">{view.counterName}</p>
         {view.ticket.recallCount > 0 && <p className="mt-3 text-lg font-semibold text-success-light">Staff are calling you again — please come now.</p>}
       </div>
       <div className="rounded-lg bg-white/10 p-5">
@@ -437,7 +546,7 @@ function Called({ view, onLeft }: { view: TicketView; onLeft: () => void }) {
           <SpeakerIcon /> Play alert sound
         </button>
       )}
-      <LeaveButton ticketId={view.ticket.id} onLeft={onLeft} tone="dark" />
+      <LeaveButton api={api} ticketId={view.ticket.id} onLeft={onLeft} tone="dark" />
     </div>
   );
 }

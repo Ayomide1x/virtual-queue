@@ -3,7 +3,8 @@ import Redis from 'ioredis';
 import { afterAll, afterEach, beforeEach, describe, expect, inject, it } from 'vitest';
 import { QueueError, QueueStore, toLobbyState } from '../src/queueStore';
 import type { Ticket } from '../src/types';
-import { seedDemo } from '../src/seed';
+import { defaultConfig, type OfficeConfig } from '../src/officeConfig';
+import { seedOffice } from '../src/seed';
 
 const url = inject('redisUrl');
 const connections: Redis[] = [];
@@ -19,8 +20,14 @@ let clock: number;
 let store: QueueStore;
 const MIN = 60_000;
 
+/** Default services (D/V/I) and six counters. */
+const config: OfficeConfig = {
+  ...defaultConfig('Test Office', 'UTC'),
+  counters: [1, 2, 3, 4, 5, 6].map((id) => ({ id, name: `Counter ${id}` })),
+};
+
 /** A store with its own Redis connection, as a second server process would have. */
-const storeOnNewConnection = () => new QueueStore(connect(), { prefix, now: () => clock });
+const storeOnNewConnection = () => new QueueStore(connect(), { prefix, config, now: () => clock });
 
 async function expectQueueError(p: Promise<unknown>, code: string) {
   await expect(p).rejects.toBeInstanceOf(QueueError);
@@ -30,7 +37,7 @@ async function expectQueueError(p: Promise<unknown>, code: string) {
 beforeEach(() => {
   prefix = `test:${randomUUID()}:`;
   clock = new Date('2026-03-02T10:00:00').getTime();
-  store = new QueueStore(redis, { prefix, now: () => clock });
+  store = new QueueStore(redis, { prefix, config, now: () => clock });
 });
 
 afterEach(async () => {
@@ -74,7 +81,7 @@ describe('joining', () => {
   });
 
   it('rolling average only keeps the most recent durations', async () => {
-    const s = new QueueStore(redis, { prefix, now: () => clock, svcTimesMax: 3 });
+    const s = new QueueStore(redis, { prefix, config, now: () => clock, svcTimesMax: 3 });
     for (const durationMin of [10, 1, 1, 1]) {
       await s.join('X', 'id');
       await s.callNext(1, 'id');
@@ -282,7 +289,7 @@ describe('concurrency', () => {
     const calls: Promise<Ticket>[] = [];
     for (let round = 0; round < 3; round++) {
       for (let c = 1; c <= COUNTERS; c++) {
-        const s = new QueueStore(connect(), { prefix, now: () => clock, counters: COUNTERS });
+        const s = new QueueStore(connect(), { prefix, config, now: () => clock });
         calls.push(s.callNext(c, 'license'));
       }
     }
@@ -347,8 +354,8 @@ describe('views', () => {
   });
 
   it('the seed script produces a populated, consistent demo', async () => {
-    await seedDemo(redis, { prefix });
-    const live = new QueueStore(redis, { prefix });
+    await seedOffice(redis, { prefix, config });
+    const live = new QueueStore(redis, { prefix, config });
     const state = await live.getStaffState();
     expect(state.totals.waiting).toBeGreaterThanOrEqual(10);
     expect(state.totals.servedToday).toBeGreaterThan(5);

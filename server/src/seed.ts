@@ -1,7 +1,7 @@
-import Redis from 'ioredis';
-import { config } from './config';
+import type Redis from 'ioredis';
+import type { OfficeConfig } from './officeConfig';
+import { AppointmentBook } from './appointments';
 import { QueueStore } from './queueStore';
-import type { ServiceId } from './services';
 
 const NAMES = [
   'Maria', 'James', 'Aisha', 'Wei', 'Carlos', 'Priya', 'Daniel', 'Fatima', 'Liam', 'Grace',
@@ -21,75 +21,89 @@ function rng(seed: number) {
 const MIN = 60_000;
 
 /**
- * Resets the queue and simulates a morning at the office: a history of served
+ * Resets an office's queue and simulates a morning there: a history of served
  * residents (realistic stats + service-time averages), a couple of no-shows,
- * two counters mid-service, and populated waiting lines.
+ * up to two counters mid-service, and populated waiting lines. Works with any
+ * set of services and counters.
  */
-export async function seedDemo(redis: Redis, opts: { prefix?: string; counters?: number } = {}): Promise<void> {
+export async function seedOffice(
+  redis: Redis,
+  opts: { prefix: string; config: OfficeConfig; officeTtlSec?: number },
+): Promise<void> {
   const realNow = Date.now();
   let clock = realNow - 95 * MIN;
   const store = new QueueStore(redis, { ...opts, now: () => clock });
   const rand = rng(42);
   let nameIdx = 0;
   const nextName = () => NAMES[nameIdx++ % NAMES.length];
-  const durations: Record<ServiceId, [number, number]> = {
-    license: [4 * MIN, 8 * MIN],
-    registration: [2.5 * MIN, 5 * MIN],
-    id: [2 * MIN, 4 * MIN],
-  };
-  const between = ([lo, hi]: [number, number]) => lo + rand() * (hi - lo);
+  const services = opts.config.services;
+  const counters = opts.config.counters.map((c) => c.id);
+  const svcAt = (i: number) => services[i % services.length];
+  const duration = (sec: number) => sec * 1000 * (0.6 + rand() * 0.8);
 
   await store.reset();
 
-  // History: one resident at a time per round, rotating services and counters.
-  const historyPlan: ServiceId[] = [
-    'license', 'registration', 'id', 'license', 'registration', 'license', 'id', 'registration',
-    'license', 'id', 'license', 'registration', 'license', 'id', 'registration', 'license',
-  ];
-  for (let i = 0; i < historyPlan.length; i++) {
-    const svc = historyPlan[i];
-    const counter = (i % 3) + 1;
-    await store.join(nextName(), svc, { joinedAt: clock - between([6 * MIN, 22 * MIN]) });
-    await store.callNext(counter, svc);
+  // History: one resident at a time, rotating services and the first few counters.
+  const historyCounters = counters.slice(0, 3);
+  for (let i = 0; i < 16; i++) {
+    const svc = svcAt(i % 2 === 0 ? 0 : i);
+    const counter = historyCounters[i % historyCounters.length];
+    await store.join(nextName(), svc.id, { joinedAt: clock - (6 + rand() * 16) * MIN, ignoreHours: true });
+    await store.callNext(counter, svc.id);
     if (i === 5 || i === 12) {
       clock += 2 * MIN;
       await store.markNoShow(counter);
     } else {
-      clock += between(durations[svc]);
+      clock += duration(svc.defaultServiceSec);
       await store.markServed(counter);
     }
     clock += 0.5 * MIN;
   }
 
-  // Live lines: people who joined over the last ~25 minutes.
+  // Live lines: 15 people who joined over the last ~25 minutes, busiest line first.
   clock = realNow;
-  const waiting: Array<[ServiceId, number]> = [
-    ['license', 26], ['registration', 24], ['license', 21], ['id', 19], ['license', 17],
-    ['registration', 15], ['license', 13], ['id', 11], ['registration', 9], ['license', 8],
-    ['id', 6], ['license', 5], ['registration', 3], ['license', 2], ['id', 1],
-  ];
-  for (const [svc, minsAgo] of waiting) {
-    await store.join(nextName(), svc, { joinedAt: realNow - minsAgo * MIN });
+  const minsAgo = [26, 24, 21, 19, 17, 15, 13, 11, 9, 8, 6, 5, 3, 2, 1];
+  const pattern = [0, 1, 0, 2, 0, 1, 0, 2, 1, 0, 2, 0, 1, 0, 2];
+  for (let i = 0; i < minsAgo.length; i++) {
+    await store.join(nextName(), svcAt(pattern[i]).id, { joinedAt: realNow - minsAgo[i] * MIN, ignoreHours: true });
   }
 
-  // Two counters are mid-service when the demo opens.
+  // Up to two counters are mid-service when the demo opens.
   clock = realNow - 3 * MIN;
-  await store.callNext(1, 'license');
-  clock = realNow - 1 * MIN;
-  await store.callNext(2, 'registration');
+  await store.callNext(counters[0], svcAt(0).id);
+  if (counters[1] !== undefined) {
+    clock = realNow - 1 * MIN;
+    await store.callNext(counters[1], svcAt(1).id).catch(() => store.callNext(counters[1]));
+  }
+
+  // A senior near the back of the busiest line has been given priority.
+  clock = realNow;
+  const lineup = (await store.getStaffState()).services[0].waiting;
+  if (lineup.length >= 3) await store.setPriority(lineup[lineup.length - 2].number, 'senior');
+
+  if (opts.config.appointments.enabled) await seedAppointments(redis, opts, nextName).catch(() => {});
 }
 
-if (require.main === module) {
-  const redis = new Redis(config.redisUrl);
-  seedDemo(redis, { counters: config.counters })
-    .then(async () => {
-      const state = await new QueueStore(redis, { counters: config.counters }).getStaffState();
-      console.log(`Seeded demo data: ${state.totals.waiting} waiting, ${state.totals.servedToday} served today.`);
-      for (const s of state.services) console.log(`  ${s.name.padEnd(22)} ${s.waitingCount} waiting`);
-    })
-    .catch((err) => {
-      console.error('Seeding failed:', err.message);
-      process.exitCode = 1;
-    })
-    .finally(() => redis.quit());
+/** Book a few appointments today and on the next open day; check one in if its window is open. */
+async function seedAppointments(redis: Redis, opts: { prefix: string; config: OfficeConfig; officeTtlSec?: number }, nextName: () => string) {
+  const ttl = opts.officeTtlSec ?? 30 * 24 * 3600;
+  const book = new AppointmentBook(redis, new QueueStore(redis, opts), { officeTtlSec: ttl });
+  const services = opts.config.services;
+  const early = opts.config.appointments.checkInEarlyMin * MIN;
+  let booked = 0;
+  let checkedIn = false;
+  const days = await book.availability(services[0].id);
+  for (const day of days.filter((d) => d.slots.length).slice(0, 2)) {
+    for (const [i, slot] of day.slots.slice(0, 6).entries()) {
+      if (i % 2 === 1) continue; // every other slot, so the day view looks realistic
+      const service = services[(booked + 1) % services.length].id;
+      const view = await book.book({ name: nextName(), service, date: day.date, time: slot.time }).catch(() => null);
+      if (!view) continue;
+      booked++;
+      if (!checkedIn && slot.start - early <= Date.now()) {
+        await book.checkIn(view.appointment.id).catch(() => {});
+        checkedIn = true;
+      }
+    }
+  }
 }

@@ -9,6 +9,26 @@ export function formatEstimate(sec: number | null | undefined): string {
   return `About ${h} hr${m ? ` ${m} min` : ''}`;
 }
 
+/** "8–12 min" (or "About 5 min" when the range is narrow) for residents. */
+export function formatRange(e: { lowSec: number; highSec: number; sec: number } | null | undefined): string {
+  if (!e) return '—';
+  if (e.highSec < 60) return 'Less than a minute';
+  const lo = Math.max(1, Math.round(e.lowSec / 60));
+  const hi = Math.max(lo, Math.round(e.highSec / 60));
+  if (hi - lo <= 1) return formatEstimate(e.sec);
+  if (hi >= 60) return `${formatMinutes(e.lowSec)}–${formatMinutes(e.highSec)}`;
+  return `${lo}–${hi} min`;
+}
+
+/** Compact range for dashboards: "8–12m". */
+export function formatRangeShort(e: { lowSec: number; highSec: number } | null | undefined): string {
+  if (!e) return '—';
+  if (e.highSec < 60) return '<1m';
+  const lo = Math.round(e.lowSec / 60);
+  const hi = Math.max(lo, Math.round(e.highSec / 60));
+  return lo === hi ? `${hi}m` : `${lo}–${hi}m`;
+}
+
 /** Compact "12m" / "1h 5m" for dashboards. */
 export function formatMinutes(sec: number | null | undefined): string {
   if (sec == null) return '—';
@@ -35,4 +55,10 @@ export function formatClock(ts: number): string {
 /** Spell out a ticket number for speech: "D-042" -> "D, 0, 4, 2". */
 export function speakableTicket(number: string): string {
   return number.replace('-', ' ').split('').filter((c) => c.trim()).join(', ');
+}
+
+/** "13:30" -> "1:30 PM" (a wall-clock time already in the office's zone). */
+export function formatHHMM(t: string): string {
+  const h = Number(t.slice(0, 2));
+  return `${h % 12 === 0 ? 12 : h % 12}:${t.slice(3, 5)} ${h < 12 ? 'AM' : 'PM'}`;
 }

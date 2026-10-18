@@ -1,4 +1,21 @@
-import type { AppConfig, ServiceId, TicketView } from '../types';
+import type {
+  AppointmentSettings,
+  AppointmentView,
+  CreatedOffice,
+  DayAvailability,
+  DayView,
+  OfficeConfig,
+  OfficeResponse,
+  PriorityReason,
+  TicketView,
+} from '../types';
+import { getStaffKey } from './staffKey';
+
+export interface AlertContact {
+  push: boolean;
+  /** Masked by the server, e.g. "a******@g****.com". */
+  email: string | null;
+}
 
 export class ApiError extends Error {
   constructor(
@@ -10,12 +27,12 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+async function request<T>(method: string, path: string, body?: unknown, headers: Record<string, string> = {}): Promise<T> {
   let res: Response;
   try {
     res = await fetch(`/api${path}`, {
       method,
-      headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
+      headers: { ...headers, ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) },
       body: body === undefined ? undefined : JSON.stringify(body),
     });
   } catch {
@@ -26,17 +43,43 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   return data as T;
 }
 
-export const api = {
-  config: () => request<AppConfig>('GET', '/config'),
-  join: (name: string, service: ServiceId) => request<TicketView>('POST', '/tickets', { name, service }),
-  getTicket: (id: string) => request<TicketView>('GET', `/tickets/${id}`),
-  leave: (id: string) => request<TicketView>('DELETE', `/tickets/${id}`),
-  callNext: (counter: number, service?: ServiceId) => request('POST', `/counters/${counter}/call`, { service }),
-  served: (counter: number, ticketNumber?: string) => request('POST', `/counters/${counter}/served`, { ticketNumber }),
-  noShow: (counter: number, ticketNumber?: string) => request('POST', `/counters/${counter}/no-show`, { ticketNumber }),
-  recall: (counter: number) => request('POST', `/counters/${counter}/recall`),
-  pause: (service: ServiceId) => request('POST', `/services/${service}/pause`),
-  resume: (service: ServiceId) => request('POST', `/services/${service}/resume`),
-  seed: () => request('POST', '/admin/seed'),
-  reset: () => request('POST', '/admin/reset'),
-};
+export const createOffice = (opts: { name?: string; timezone?: string; seed?: boolean }) =>
+  request<CreatedOffice>('POST', '/offices', opts);
+
+/** API scoped to one office. Staff calls send the key saved for that office. */
+export function officeApi(officeId: string) {
+  const base = `/o/${officeId}`;
+  const staff = <T = unknown>(method: string, path: string, body?: unknown) =>
+    request<T>(method, `${base}${path}`, body, { 'X-Staff-Key': getStaffKey(officeId) ?? '' });
+  return {
+    officeId,
+    info: () => request<OfficeResponse>('GET', base),
+    join: (name: string, service: string) => request<TicketView>('POST', `${base}/tickets`, { name, service }),
+    leave: (ticketId: string) => request<TicketView>('DELETE', `${base}/tickets/${ticketId}`),
+    getTicketAlerts: (ticketId: string) => request<AlertContact>('GET', `${base}/tickets/${ticketId}/notify`),
+    setTicketAlerts: (ticketId: string, body: { push?: PushSubscriptionJSON; email?: string }) => request<AlertContact>('POST', `${base}/tickets/${ticketId}/notify`, body),
+    removeTicketAlerts: (ticketId: string, channel: 'push' | 'email') => request<AlertContact>('DELETE', `${base}/tickets/${ticketId}/notify?channel=${channel}`),
+    getAppointmentAlerts: (id: string) => request<AlertContact>('GET', `${base}/appointments/${id}/notify`),
+    setAppointmentAlerts: (id: string, body: { push?: PushSubscriptionJSON; email?: string }) => request<AlertContact>('POST', `${base}/appointments/${id}/notify`, body),
+    removeAppointmentAlerts: (id: string, channel: 'push' | 'email') => request<AlertContact>('DELETE', `${base}/appointments/${id}/notify?channel=${channel}`),
+    slots: (service: string) => request<{ days: DayAvailability[]; settings: AppointmentSettings }>('GET', `${base}/slots?service=${encodeURIComponent(service)}`),
+    book: (input: { name: string; service: string; date: string; time: string }) => request<AppointmentView>('POST', `${base}/appointments`, input),
+    appointment: (id: string) => request<AppointmentView>('GET', `${base}/appointments/${id}`),
+    checkIn: (id: string) => request<{ ticketId: string; view: TicketView }>('POST', `${base}/appointments/${id}/check-in`),
+    cancelAppointment: (id: string) => request<AppointmentView>('POST', `${base}/appointments/${id}/cancel`),
+
+    verifyStaffKey: (key: string) => request('GET', `${base}/session`, undefined, { 'X-Staff-Key': key }),
+    callNext: (counter: number, service?: string) => staff<{ number: string; name: string; counterName: string }>('POST', `/counters/${counter}/call`, { service }),
+    served: (counter: number, ticketNumber?: string) => staff<{ number: string }>('POST', `/counters/${counter}/served`, { ticketNumber }),
+    noShow: (counter: number, ticketNumber?: string) => staff<{ number: string }>('POST', `/counters/${counter}/no-show`, { ticketNumber }),
+    recall: (counter: number) => staff<{ number: string }>('POST', `/counters/${counter}/recall`),
+    pause: (service: string) => staff('POST', `/services/${service}/pause`),
+    resume: (service: string) => staff('POST', `/services/${service}/resume`),
+    setPriority: (number: string, reason: PriorityReason | null) => staff<{ number: string }>('POST', '/priority', { number, reason }),
+    dayView: (date?: string) => staff<DayView>('GET', `/appointments${date ? `?date=${date}` : ''}`),
+    getSettings: () => staff<OfficeConfig>('GET', '/settings'),
+    saveSettings: (settings: unknown) => staff<OfficeConfig>('PUT', '/settings', settings),
+    seed: () => staff('POST', '/seed'),
+    reset: () => staff('POST', '/reset'),
+  };
+}
