@@ -1,6 +1,7 @@
 import type Redis from 'ioredis';
 import type { OfficeConfig } from './officeConfig';
 import { AppointmentBook } from './appointments';
+import { seedHistory } from './history';
 import { QueueStore } from './queueStore';
 
 const NAMES = [
@@ -28,9 +29,11 @@ const MIN = 60_000;
  */
 export async function seedOffice(
   redis: Redis,
-  opts: { prefix: string; config: OfficeConfig; officeTtlSec?: number },
+  opts: { prefix: string; config: OfficeConfig; officeTtlSec?: number; historyDays?: number },
 ): Promise<void> {
   const realNow = Date.now();
+  // Past weeks for the analytics dashboard (skips days that already have history).
+  await seedHistory(redis, { ...opts, days: opts.historyDays ?? 60, now: realNow });
   let clock = realNow - 95 * MIN;
   const store = new QueueStore(redis, { ...opts, now: () => clock });
   const rand = rng(42);

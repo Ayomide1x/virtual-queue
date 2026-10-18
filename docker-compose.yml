@@ -27,6 +27,8 @@ services:
       PUBLIC_PORT: ${PORT:-3000}
       # Offices and all their data expire after this many days without activity.
       OFFICE_TTL_DAYS: ${OFFICE_TTL_DAYS:-30}
+      # Days of ticket history kept for the analytics dashboard.
+      ANALYTICS_RETENTION_DAYS: ${ANALYTICS_RETENTION_DAYS:-90}
       # Per-IP limits, as requests/seconds.
       RATE_LIMIT_CREATE_OFFICE: ${RATE_LIMIT_CREATE_OFFICE:-10/3600}
       RATE_LIMIT_JOIN: ${RATE_LIMIT_JOIN:-30/60}

@@ -1,6 +1,7 @@
 import { useEffect, useRef, type ReactNode } from 'react';
 import { Navigate, Route, Routes, useLocation, useParams } from 'react-router-dom';
 import { LangScope, useI18n } from './i18n';
+import Analytics from './pages/Analytics';
 import AppointmentPage from './pages/Appointment';
 import Book from './pages/Book';
 import Display from './pages/Display';
@@ -35,6 +36,7 @@ export default function App() {
         <Route path="/o/:officeId/book" element={resident(<Book />)} />
         <Route path="/o/:officeId/appointment/:apptId" element={resident(<AppointmentPage />)} />
         <Route path="/o/:officeId/appointments" element={staff(<StaffAppointments />)} />
+        <Route path="/o/:officeId/analytics" element={staff(<Analytics />)} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </>
@@ -52,7 +54,7 @@ const focusMain = () => {
 /** First thing a keyboard user reaches: jumps past the header to the page content. */
 function SkipLink() {
   const { pathname } = useLocation();
-  const staffPage = /\/(staff|settings|appointments)$/.test(pathname) || pathname === '/';
+  const staffPage = /\/(staff|settings|appointments|analytics)$/.test(pathname) || pathname === '/';
   return (
     <LangScope fixed={staffPage ? 'en' : undefined}>
       <SkipLinkInner />

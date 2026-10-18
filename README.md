@@ -12,6 +12,7 @@ A real-time, multi-office virtual queue for government offices (DMV, city servic
 | Book | `/o/:officeId/book` | Public: book an appointment slot |
 | Appointment | `/o/:officeId/appointment/:id` | Public (secret link): confirmation, check-in, cancel |
 | Day view | `/o/:officeId/appointments` | **Staff key:** each day's appointments, check in or cancel on someone's behalf |
+| Analytics | `/o/:officeId/analytics` | **Staff key:** waits by hour and weekday, tickets per day, no-shows, busiest services, counter times, CSV export |
 
 ---
 
@@ -192,6 +193,45 @@ Checked against WCAG 2.2 AA with automated tests (see Tests).
 - **Larger text:** the **AA** button in the header scales the page's text by 25% and is remembered on the device. The layout reflows, with the header controls wrapping onto their own row. The lobby display is already sized for viewing across a room, so it doesn't change.
 - **Reduced motion:** when the device asks for less motion, fades, pulses and spinners are turned off.
 
+## Analytics
+
+Each office has a dashboard at `/o/:officeId/analytics`, linked from the staff console. It needs the staff key.
+
+- **Summary:** tickets, served, average and longest wait, no-show rate, and average service time.
+- **Charts:**
+  - average and longest wait by the hour people joined
+  - average and longest wait by day of the week
+  - tickets served per day, with no-shows and people who left
+  - busiest services
+  - average service time per counter
+- **Date range:** last 7, 30 or 90 days, or any From and To dates within the retention period.
+- **CSV export** of the selected range, in two files:
+  - **Tickets:** one row per ticket, with joined, called and ended times, outcome, counter, and wait and service minutes.
+  - **All events:** one row per event.
+  - Times are in the office's time zone, and the files open cleanly in Excel. Cells that could run as spreadsheet formulas are defused.
+  - Residents' names are never included.
+
+**Definitions** (also shown on the page):
+- Times use the office's time zone, and tickets count on the day they joined.
+- **Wait** runs from joining to the *first* call; recalls don't restart it. People who left before being called aren't in the wait figures.
+- **Service time** runs from the call to *Served*. No-shows are excluded.
+- **No-show rate** is no-shows ÷ everyone called (served + no-show).
+
+**How events are recorded without slowing the queue:**
+- Every `joined`, `called`, `served`, `no_show` and `left` event is appended to a per-day list, `ev:<YYYY-MM-DD>`, inside the same Lua script as the queue change. That's one `RPUSH`, so events can't be lost, duplicated or recorded out of step with the queue.
+- Each event stores its time, the service, the counter, the ticket number, the kind (walk-in or appointment) and any priority reason.
+- Tickets are identified by a hash of their id ("visit"), never the secret id itself.
+- The dashboard reads only these lists, never the live queue's keys. A 90-day report over about 16,000 tickets takes around 100 ms.
+- Clearing the queues (**Reset**, or loading demo data) keeps the history.
+
+**Retention:** an active office keeps `ANALYTICS_RETENTION_DAYS` (default 90) of history. Older days stop being refreshed and expire, and everything goes when the office expires.
+
+**Demo history:** *Create an office with sample data*, the staff console's demo tools and `npm run office -- seed <id>` all fill the last 60 days with simulated traffic:
+- Mondays are busiest, with a mid-morning rush and a lunch dip, shorter Saturdays and closed Sundays (or your opening hours, if set).
+- Counters work at different speeds, and people are served first come, first served.
+- A few people give up when the wait gets long, and about 7% are no-shows.
+- Days that already have real history are never overwritten, so seeding twice is safe.
+
 ## Local development
 
 Requires Node 20+ and Redis 6.2+ (`brew install redis && brew services start redis`, or `docker run -p 6379:6379 redis:7-alpine`).
@@ -218,7 +258,24 @@ docker run --rm -d -p 6399:6379 redis:7-alpine
 TEST_REDIS_URL=redis://127.0.0.1:6399 npm test
 ```
 
-**220 tests in twelve files**, including:
+**242 tests in thirteen files**, including:
+
+- `analytics.test.ts`:
+  - **The calculations, on hand-built events with known answers:**
+    - average and longest wait, average service time and no-show rate
+    - recalls not resetting the wait, and walk-outs excluded from waits
+    - hour and weekday buckets in the office's time zone across a DST change
+    - per-day counts including empty days and tickets served after midnight
+    - busiest services with shares, including quiet and since-removed services
+    - per-counter service times excluding no-shows
+    - an empty range, and a 90-day range computed quickly
+  - **CSV:** quoting and formula defusing, office-local times, and the column layout of both exports.
+  - **Recording:** every live queue action writes the right event (served, no-show, leaving while waiting or while called, appointment check-in, priority) under a hashed id. History survives a queue reset and has its expiry refreshed.
+  - **Seeding:**
+    - realistic shape: busy Mondays, a mid-morning peak, a sensible no-show rate, and differing counter speeds
+    - idempotent, never overwriting real days, and run through the real demo seed
+  - **API:** 401/403, range validation, and CSV headers and file names.
+- Browser tests: the dashboard is checked with axe on desktop, and on a phone with every number table open. A behaviour test changes the date range, downloads a CSV, and checks the charts fit a phone screen.
 
 - `a11y.test.ts`: **axe-core on every page and state**, run in real Chrome against the real server.
   - It checks the WCAG 2.2 A/AA rules plus axe's best-practice rules.
@@ -347,6 +404,7 @@ The queue tests cover ordering, the rolling-average wait estimate, pause/resume,
 | `notifyidx` | set | tickets with alerts on, used by the scan |
 | `alerts:<ticketId>` / `alerts:appt:<id>` | hash | alerts already queued, for dedupe. No personal data |
 | `slots:<date>` | hash | `HH:MM\|service` → bookings in that slot (capacity check) |
+| `ev:<YYYY-MM-DD>` | list | ticket events for analytics: `{t, e, v, n, s, c?, k?, p?}` (time, event, visit hash, number, service, counter, kind, priority). Kept for `ANALYTICS_RETENTION_DAYS` while the office is active |
 
 Global alert keys: `vq:alerts:jobs` and `vq:alerts:processing` (the job queue, claimed with leases) and `vq:alerts:reminders` (appointment reminders by due time).
 
@@ -373,6 +431,7 @@ All keys expire after `OFFICE_TTL_DAYS` of inactivity. Finished tickets (12 h), 
 | `PUBLIC_URL` | `http://$HOST_IP:$PORT` if `HOST_IP` is set | Base URL for QR codes and share links. `up.sh` sets it to your LAN address |
 | `HOST_IP` | auto-detected (not in Docker) | LAN IP, used when `PUBLIC_URL` isn't set |
 | `OFFICE_TTL_DAYS` | `30` | Inactivity expiry for offices |
+| `ANALYTICS_RETENTION_DAYS` | `90` | Days of ticket history (analytics) an active office keeps |
 | `RATE_LIMIT_CREATE_OFFICE` | `10/3600` | Office creations per IP per window (requests/seconds) |
 | `RATE_LIMIT_JOIN` | `30/60` | Joins per IP per window |
 | `RATE_LIMIT_BOOK` | `10/600` | Appointment bookings per IP per window |
@@ -396,13 +455,16 @@ server/src/
   rateLimit.ts    per-IP limits in Redis
   app.ts          REST API + Socket.IO rooms + broadcast
   seed.ts         sample residents for any office
+  analytics.ts    dashboard calculations, CSV export, event history reads
+  history.ts      simulated past days for demos
   cli.ts          create/seed offices from the terminal
   alerts/         service.ts (opt-in, scan, job queue & worker) · senders.ts (web push, Resend, log)
   setupAlerts.ts  generates VAPID keys into .env
 web/public/       sw.js (push + notification clicks) · icons/
   network.ts      LAN IP detection
 server/test/      vitest suite (real Redis)
-web/src/pages/    Home · Resident · Book · Appointment · Staff · StaffAppointments · Display · Settings
+web/src/pages/    Home · Resident · Book · Appointment · Staff · StaffAppointments · Analytics · Display · Settings
+web/src/components/Charts.tsx  small accessible SVG charts (each with a data table)
 web/src/i18n/     en.ts (source text) · es.ts · index.tsx (language registry, provider, date/time formatting)
 web/src/lib/      api client, socket hooks, clock sync, sound, text size
 server/src/i18n.ts  languages the server accepts + alert texts in each

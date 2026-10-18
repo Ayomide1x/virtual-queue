@@ -14,7 +14,7 @@ async function main() {
     conn.on('error', (err) => console.error(`[${label}] ${err.message}`));
   }
 
-  const offices = new OfficeStore(redis, { ttlSec: config.officeTtlSec });
+  const offices = new OfficeStore(redis, { ttlSec: config.officeTtlSec, analyticsDays: config.analyticsDays });
   const lanIp = getLanIp(config.hostIp);
   const a = config.alerts;
   const alerts = new AlertService({

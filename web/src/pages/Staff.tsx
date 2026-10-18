@@ -85,6 +85,9 @@ function StaffScreen({ officeId, staffKey, onForbidden, initialName }: { officeI
           <Link to={`/o/${officeId}/appointments`} className="rounded px-2 py-1 text-sm font-semibold text-white/90 underline-offset-4 hover:underline">
             Appointments
           </Link>
+          <Link to={`/o/${officeId}/analytics`} className="rounded px-2 py-1 text-sm font-semibold text-white/90 underline-offset-4 hover:underline">
+            Analytics
+          </Link>
           <Link to={`/o/${officeId}/settings`} className="rounded px-2 py-1 text-sm font-semibold text-white/90 underline-offset-4 hover:underline">
             Settings
           </Link>

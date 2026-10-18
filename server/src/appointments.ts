@@ -230,6 +230,8 @@ export class AppointmentBook {
       svc.code,
       String(Math.min(2 * 24 * 3600, this.opts.officeTtlSec)),
       String(this.opts.officeTtlSec),
+      zonedParts(now, this.config.timezone).dateKey,
+      String(this.opts.officeTtlSec),
     )) as [string, string?, string?];
     if (status !== 'ok') {
       const { opensAt } = this.window(appt.slotStart);

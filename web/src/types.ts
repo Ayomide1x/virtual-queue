@@ -223,3 +223,35 @@ export interface DayView {
   entries: DayViewEntry[];
   settings: AppointmentSettings;
 }
+
+// ------------------------------------------------------------------ analytics
+
+export interface WaitBucket {
+  count: number;
+  avgWaitSec: number | null;
+  maxWaitSec: number | null;
+}
+
+/** Mirrors AnalyticsReport in server/src/analytics.ts. */
+export interface AnalyticsReport {
+  from: string;
+  to: string;
+  today: string;
+  retentionDays: number;
+  timezone: string;
+  totals: {
+    joined: number;
+    served: number;
+    noShows: number;
+    left: number;
+    avgWaitSec: number | null;
+    maxWaitSec: number | null;
+    avgServiceSec: number | null;
+    noShowRate: number | null;
+  };
+  waitByHour: Array<WaitBucket & { hour: number }>;
+  waitByWeekday: Array<WaitBucket & { day: Weekday }>;
+  perDay: Array<{ date: string; joined: number; served: number; noShows: number; left: number }>;
+  services: Array<{ id: string; name: string; code: string; joined: number; served: number; noShows: number; left: number; avgWaitSec: number | null; avgServiceSec: number | null; share: number }>;
+  counters: Array<{ id: number; name: string; served: number; avgServiceSec: number | null }>;
+}

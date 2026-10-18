@@ -21,6 +21,22 @@
  * ticket in one atomic step.
  */
 
+/**
+ * Analytics: every ticket event is appended to a per-day list
+ * (`ev:<YYYY-MM-DD>`, office-local), in the same atomic step as the change it
+ * records. One RPUSH, so it adds nothing noticeable to the live queue, and the
+ * dashboard reads only these lists, never the queue. Tickets are identified by
+ * a hash of their id ("visit"), never the secret id itself.
+ */
+const EVENT_FN = `
+local function logEvent(prefix, day, ttl, ev)
+  local key = prefix .. 'ev:' .. day
+  redis.call('RPUSH', key, cjson.encode(ev))
+  redis.call('EXPIRE', key, ttl)
+end
+local function visitOf(id) return string.sub(redis.sha1hex(id), 1, 12) end
+`;
+
 const SCORE_FN = `
 local function score(priority, orderAt, seq)
   local tier = 1
@@ -31,10 +47,10 @@ end
 
 /**
  * KEYS[1] seq key
- * ARGV: prefix, id, name, service, code, joinedAt, seqTtl, ttl, lang
+ * ARGV: prefix, id, name, service, code, joinedAt, seqTtl, ttl, lang, eventDay, eventTtl
  * Returns the ticket number.
  */
-export const JOIN = `${SCORE_FN}
+export const JOIN = `${SCORE_FN}${EVENT_FN}
 local prefix, id, name, service, code, joinedAt, seqTtl, ttl, lang = ARGV[1], ARGV[2], ARGV[3], ARGV[4], ARGV[5], ARGV[6], ARGV[7], ARGV[8], ARGV[9]
 local seq = redis.call('INCR', KEYS[1])
 redis.call('EXPIRE', KEYS[1], seqTtl)
@@ -47,18 +63,19 @@ redis.call('EXPIRE', tk, ttl)
 local q = prefix .. 'queue:' .. service
 redis.call('ZADD', q, score(nil, joinedAt, seq), id)
 redis.call('EXPIRE', q, ttl)
+logEvent(prefix, ARGV[10], ARGV[11], {t = tonumber(joinedAt), e = 'joined', v = visitOf(id), n = number, s = service, k = 'walkin'})
 return number
 `;
 
 /**
  * KEYS[1] counters hash, KEYS[2] paused set, KEYS[3] recent list, KEYS[4] today's stats hash
- * ARGV: prefix, counter, now, recentMax, ttl, statsTtl, service1 [, service2, ...]
+ * ARGV: prefix, counter, now, recentMax, ttl, statsTtl, eventDay, eventTtl, service1 [, service2, ...]
  * Picks the longest-waiting ticket among the given (unpaused) services.
  * Returns {'ok', ticketId} or {'err', code[, detail]}.
  */
-export const CALL_NEXT = `
+export const CALL_NEXT = `${EVENT_FN}
 local prefix, counter, now, recentMax = ARGV[1], ARGV[2], tonumber(ARGV[3]), tonumber(ARGV[4])
-local ttl, statsTtl = ARGV[5], ARGV[6]
+local ttl, statsTtl, evDay, evTtl = ARGV[5], ARGV[6], ARGV[7], ARGV[8]
 
 local busy = redis.call('HGET', KEYS[1], counter)
 if busy then
@@ -69,7 +86,7 @@ if busy then
 end
 
 local open = {}
-for i = 7, #ARGV do
+for i = 9, #ARGV do
   if redis.call('SISMEMBER', KEYS[2], ARGV[i]) == 0 then table.insert(open, ARGV[i]) end
 end
 if #open == 0 then return {'err', 'paused'} end
@@ -88,7 +105,7 @@ for _ = 1, 1000 do
 
   local id = redis.call('ZPOPMIN', prefix .. 'queue:' .. bestSvc)[1]
   local tk = prefix .. 'ticket:' .. id
-  local t = redis.call('HMGET', tk, 'status', 'joinedAt', 'number', 'lang')
+  local t = redis.call('HMGET', tk, 'status', 'joinedAt', 'number', 'lang', 'priority', 'kind')
   if t[1] == 'waiting' then
     redis.call('HSET', tk, 'status', 'called', 'counter', counter, 'calledAt', now)
     redis.call('EXPIRE', tk, ttl)
@@ -105,6 +122,7 @@ for _ = 1, 1000 do
     redis.call('LPUSH', log, cjson.encode({c = tonumber(counter), s = bestSvc, at = now}))
     redis.call('LTRIM', log, 0, 199)
     redis.call('EXPIRE', log, ttl)
+    logEvent(prefix, evDay, evTtl, {t = now, e = 'called', v = visitOf(id), n = t[3], s = bestSvc, c = tonumber(counter), p = t[5] or nil, k = t[6] or nil})
     return {'ok', id}
   end
 end
@@ -114,9 +132,9 @@ return {'err', 'empty'}
 /**
  * Finish the ticket currently at a counter as served or no-show.
  * KEYS[1] counters hash, KEYS[2] today's stats hash, KEYS[3] counter-last hash
- * ARGV: prefix, counter, now, outcome, svcTimesMax, finishedTtl, expectedId ('' = any), ttl, statsTtl
+ * ARGV: prefix, counter, now, outcome, svcTimesMax, finishedTtl, expectedId ('' = any), ttl, statsTtl, eventDay, eventTtl
  */
-export const COMPLETE = `
+export const COMPLETE = `${EVENT_FN}
 local prefix, counter, now, outcome = ARGV[1], ARGV[2], tonumber(ARGV[3]), ARGV[4]
 local svcMax, finishedTtl, expected, ttl, statsTtl = tonumber(ARGV[5]), ARGV[6], ARGV[7], ARGV[8], ARGV[9]
 
@@ -147,16 +165,17 @@ end
 redis.call('EXPIRE', KEYS[2], statsTtl)
 redis.call('HSET', KEYS[3], counter, cjson.encode({number = t[4], outcome = outcome, at = now}))
 redis.call('EXPIRE', KEYS[3], ttl)
+logEvent(prefix, ARGV[10], ARGV[11], {t = now, e = outcome, v = visitOf(id), n = t[4], s = t[2], c = tonumber(counter)})
 return {'ok', id}
 `;
 
 /**
  * Resident leaves the line — whether still waiting or already called.
  * KEYS[1] counters hash, KEYS[2] today's stats hash, KEYS[3] counter-last hash
- * ARGV: prefix, id, now, finishedTtl, ttl, statsTtl
+ * ARGV: prefix, id, now, finishedTtl, ttl, statsTtl, eventDay, eventTtl
  * Returns {'ok', previousStatus} or {'err', code}.
  */
-export const LEAVE = `
+export const LEAVE = `${EVENT_FN}
 local prefix, id, now, finishedTtl, ttl, statsTtl = ARGV[1], ARGV[2], tonumber(ARGV[3]), ARGV[4], ARGV[5], ARGV[6]
 local tk = prefix .. 'ticket:' .. id
 local t = redis.call('HMGET', tk, 'status', 'service', 'counter', 'number')
@@ -180,6 +199,9 @@ redis.call('DEL', prefix .. 'notify:' .. id)
 redis.call('SREM', prefix .. 'notifyidx', id)
 redis.call('HINCRBY', KEYS[2], t[2] .. ':left', 1)
 redis.call('EXPIRE', KEYS[2], statsTtl)
+local counterId = nil
+if t[1] == 'called' then counterId = tonumber(t[3]) end
+logEvent(prefix, ARGV[7], ARGV[8], {t = now, e = 'left', v = visitOf(id), n = t[4], s = t[2], c = counterId})
 return {'ok', t[1]}
 `;
 
@@ -337,9 +359,9 @@ return {'ok', id}
  * ticket ordered as if it joined at the slot time. Later than that, it's missed.
  * Checking in twice returns the same ticket.
  * KEYS[1] seq key
- * ARGV: prefix, apptId, now, earlyMs, lateMs, ticketId, service, code, seqTtl, ttl
+ * ARGV: prefix, apptId, now, earlyMs, lateMs, ticketId, service, code, seqTtl, ttl, eventDay, eventTtl
  */
-export const CHECK_IN = `${SCORE_FN}
+export const CHECK_IN = `${SCORE_FN}${EVENT_FN}
 local prefix, apptId, now, early, late = ARGV[1], ARGV[2], tonumber(ARGV[3]), tonumber(ARGV[4]), tonumber(ARGV[5])
 local ticketId, service, code, seqTtl, ttl = ARGV[6], ARGV[7], ARGV[8], ARGV[9], ARGV[10]
 local ak = prefix .. 'appt:' .. apptId
@@ -368,6 +390,7 @@ local q = prefix .. 'queue:' .. service
 redis.call('ZADD', q, score(nil, slot, seq), ticketId)
 redis.call('EXPIRE', q, ttl)
 redis.call('HSET', ak, 'status', 'checked_in', 'ticketId', ticketId, 'checkedInAt', now)
+logEvent(prefix, ARGV[11], ARGV[12], {t = now, e = 'joined', v = visitOf(ticketId), n = number, s = service, k = 'appointment'})
 -- Alerts the resident asked for on their appointment now follow their ticket.
 local nk = prefix .. 'notify:appt:' .. apptId
 if redis.call('EXISTS', nk) == 1 then

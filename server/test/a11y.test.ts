@@ -11,6 +11,7 @@ let app: TestApp;
 let browser: Browser;
 let office: { officeId: string; staffKey: string };
 let closedOffice: { officeId: string; staffKey: string };
+let historyOffice: { officeId: string; staffKey: string };
 let ids: { waiting: string; called: string; served: string; appt: string; cancelledAppt: string };
 
 const o = (p: string) => `/o/${office.officeId}${p}`;
@@ -46,6 +47,9 @@ beforeAll(async () => {
   const cancelledAppt = (await app.api('POST', o('/appointments'), { name: 'Hal', service: 'id', ...slot })).body.appointment.id;
   await app.api('POST', o(`/appointments/${cancelledAppt}/cancel`));
   ids = { waiting, called, served, appt, cancelledAppt };
+
+  // An office with weeks of (seeded) history, for the analytics dashboard.
+  historyOffice = (await app.api('POST', '/offices', { name: 'History Office', timezone: 'UTC', seed: true })).body;
 
   // An office whose hours mean it's closed now.
   closedOffice = (await app.api('POST', '/offices', { name: 'Closed Office', timezone: 'UTC' })).body;
@@ -165,6 +169,15 @@ const states: PageState[] = [
       await p.waitForSelector('button[aria-label^="Priority options"]');
       await p.click('button[aria-label^="Priority options"]');
       await p.waitForSelector('[role=group][id^=priority-]');
+    },
+  },
+  { name: 'analytics dashboard', path: () => `/o/${historyOffice.officeId}/analytics#key=${historyOffice.staffKey}`, width: 1280, ready: 'css:figure svg' },
+  {
+    name: 'analytics dashboard, numbers tables open (phone)',
+    path: () => `/o/${historyOffice.officeId}/analytics#key=${historyOffice.staffKey}`,
+    ready: 'css:figure svg',
+    act: async (p) => {
+      for (const d of await p.$$('figure details summary')) await d.click();
     },
   },
   { name: 'staff settings', path: () => o(`/settings#key=${office.staffKey}`), width: 1280, ready: 'css:main h1' },

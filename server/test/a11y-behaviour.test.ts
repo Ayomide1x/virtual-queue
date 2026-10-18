@@ -2,6 +2,9 @@
 // How the app behaves for people using a keyboard, a screen reader, larger
 // text, reduced motion, or Spanish — checked in a real browser.
 
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import type { Browser, Page } from 'puppeteer';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { buildWeb, clickText, launch, newPage, pageErrors, startApp, waitForText, type TestApp } from './browser';
@@ -312,6 +315,44 @@ describe('larger text and reduced motion', () => {
     expect(await anim()).toEqual({ duration: '1.8s', count: 'infinite' });
     await page.emulateMediaFeatures([{ name: 'prefers-reduced-motion', value: 'reduce' }]);
     expect(await anim()).toEqual({ duration: '1e-05s', count: '1' });
+    await page.browserContext().close();
+  });
+});
+
+describe('analytics dashboard', () => {
+  it('changes the date range and downloads CSV files', async () => {
+    const { officeId, staffKey } = (await app.api('POST', '/offices', { name: 'Dash', timezone: 'UTC', seed: true })).body;
+    const page = await newPage(browser, { width: 1280 });
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vq-dl-'));
+    const cdp = await page.createCDPSession();
+    // Downloads are allowed per browser context (each test page has its own).
+    await cdp.send('Browser.setDownloadBehavior', { behavior: 'allow', downloadPath: dir, browserContextId: page.browserContext().id });
+    await page.goto(`${app.base}/o/${officeId}/analytics#key=${staffKey}`, { waitUntil: 'networkidle0' });
+    await page.waitForSelector('figure svg');
+    const pressed = () => page.$$eval('[aria-label="Quick ranges"] button', (bs) => bs.filter((b) => b.getAttribute('aria-pressed') === 'true').map((b) => b.textContent));
+    expect(await pressed()).toEqual(['Last 30 days']);
+    const perDayRows = () => page.$$eval('figure', (fs) => fs.find((f) => f.textContent?.includes('Tickets served per day'))!.querySelectorAll('tbody tr').length);
+    expect(await perDayRows()).toBe(30);
+
+    await clickText(page, 'Last 7 days', 'button');
+    await until(perDayRows, (n) => n === 7);
+    expect(await pressed()).toEqual(['Last 7 days']);
+    expect(await page.$eval('main p[role=status]', (p) => p.textContent)).toMatch(/^Showing /);
+
+    await clickText(page, 'Tickets', 'button');
+    const file = await until(
+      async () => fs.readdirSync(dir).find((f) => f.endsWith('.csv')),
+      (f) => !!f,
+    );
+    expect(file).toMatch(new RegExp(`^tickets-${officeId}-\\d{4}-\\d{2}-\\d{2}-to-\\d{4}-\\d{2}-\\d{2}\\.csv$`));
+    const csv = fs.readFileSync(path.join(dir, file!), 'utf8');
+    expect(csv.split('\r\n')[0]).toContain('date,ticket,visit,service');
+    expect(csv.split('\r\n').length).toBeGreaterThan(50);
+    // On a phone the charts fit the screen (no sideways scrolling).
+    await page.setViewport({ width: 390, height: 844 });
+    await sleep(300);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    expect(pageErrors(page)).toEqual([]);
     await page.browserContext().close();
   });
 });

@@ -27,7 +27,7 @@ async function main() {
     if (command === 'create') {
       const tz = flag(args, 'tz') ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
       const { officeId, staffKey, config: cfg } = await offices.create({ name: flag(args, 'name'), timezone: tz });
-      if (args.includes('--seed')) await seedOffice(redis, { prefix: offices.prefixFor(officeId), config: cfg, officeTtlSec: offices.ttlSec });
+      if (args.includes('--seed')) await seedOffice(redis, { prefix: offices.prefixFor(officeId), config: cfg, officeTtlSec: offices.ttlSec, historyDays: Math.min(60, offices.analyticsDays - 1) });
       console.log(`Created office “${cfg.name}” (${officeId})${args.includes('--seed') ? ' with sample residents' : ''}\n`);
       console.log(`  Staff (keep private): ${base}/o/${officeId}/staff#key=${staffKey}`);
       console.log(`  Lobby display:        ${base}/o/${officeId}/display`);
@@ -36,7 +36,7 @@ async function main() {
     } else if (command === 'seed' && args[0]) {
       const cfg = await offices.getConfig(args[0]);
       if (!cfg) throw new Error(`Office ${args[0]} not found (or expired).`);
-      await seedOffice(redis, { prefix: offices.prefixFor(args[0]), config: cfg, officeTtlSec: offices.ttlSec });
+      await seedOffice(redis, { prefix: offices.prefixFor(args[0]), config: cfg, officeTtlSec: offices.ttlSec, historyDays: Math.min(60, offices.analyticsDays - 1) });
       console.log(`Filled “${cfg.name}” with sample residents.`);
     } else {
       console.log('Usage:\n  office create [--name "Office name"] [--tz Area/City] [--seed]\n  office seed <officeId>');

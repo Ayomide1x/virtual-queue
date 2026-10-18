@@ -1,4 +1,5 @@
 import type {
+  AnalyticsReport,
   AppointmentSettings,
   AppointmentView,
   CreatedOffice,
@@ -44,6 +45,14 @@ async function request<T>(method: string, path: string, body?: unknown, headers:
   return data as T;
 }
 
+const rangeQuery = (from?: string, to?: string) => {
+  const q = new URLSearchParams();
+  if (from) q.set('from', from);
+  if (to) q.set('to', to);
+  const s = q.toString();
+  return s ? `?${s}` : '';
+};
+
 export const createOffice = (opts: { name?: string; timezone?: string; seed?: boolean }) =>
   request<CreatedOffice>('POST', '/offices', opts);
 
@@ -82,6 +91,22 @@ export function officeApi(officeId: string) {
     dayView: (date?: string) => staff<DayView>('GET', `/appointments${date ? `?date=${date}` : ''}`),
     getSettings: () => staff<OfficeConfig>('GET', '/settings'),
     saveSettings: (settings: unknown) => staff<OfficeConfig>('PUT', '/settings', settings),
+    analytics: (from?: string, to?: string) => staff<AnalyticsReport>('GET', `/analytics${rangeQuery(from, to)}`),
+    /** CSV files need the staff key header, so they're fetched and then saved by the browser. */
+    downloadCsv: async (kind: 'events' | 'visits', from: string, to: string) => {
+      let res: Response;
+      try {
+        res = await fetch(`/api${base}/analytics/${kind}.csv${rangeQuery(from, to)}`, { headers: { 'X-Staff-Key': getStaffKey(officeId) ?? '' } });
+      } catch {
+        throw new ApiError('network', 'Can’t reach the server. Check your connection and try again.', 0);
+      }
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new ApiError(data.error ?? 'server_error', data.message ?? 'Could not download the file.', res.status);
+      }
+      const name = /filename="?([^";]+)"?/.exec(res.headers.get('content-disposition') ?? '')?.[1] ?? `${kind}.csv`;
+      return { blob: await res.blob(), name };
+    },
     seed: () => staff('POST', '/seed'),
     reset: () => staff('POST', '/reset'),
   };

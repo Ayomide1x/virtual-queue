@@ -160,7 +160,11 @@ export class QueueStore {
 
   /** "Today" in the office's own time zone. */
   private today(): string {
-    return zonedParts(this.now(), this.config.timezone).dateKey;
+    return this.dayOf(this.now());
+  }
+
+  private dayOf(ts: number): string {
+    return zonedParts(ts, this.config.timezone).dateKey;
   }
 
   private key = {
@@ -221,6 +225,8 @@ export class QueueStore {
       this.seqTtl,
       this.ttl,
       opts.lang ?? DEFAULT_LANG,
+      this.dayOf(joinedAt),
+      this.ttl,
     ]);
     await this.notify();
     const view = await this.getTicketView(id);
@@ -244,7 +250,7 @@ export class QueueStore {
     const [status, detail] = await this.run(
       LEAVE,
       [this.key.counters(), this.key.stats(this.today()), this.key.counterLast()],
-      [this.prefix, id, this.now(), this.finishedTtl, this.ttl, this.statsTtl],
+      [this.prefix, id, this.now(), this.finishedTtl, this.ttl, this.statsTtl, this.today(), this.ttl],
     );
     if (status !== 'ok') throw new QueueError(detail as QueueErrorCode);
     await this.notify();
@@ -264,7 +270,7 @@ export class QueueStore {
     const [status, detail] = await this.run(
       CALL_NEXT,
       [this.key.counters(), this.key.paused(), this.key.recent(), this.key.stats(this.today())],
-      [this.prefix, counter, this.now(), this.recentMax, this.ttl, this.statsTtl, ...services],
+      [this.prefix, counter, this.now(), this.recentMax, this.ttl, this.statsTtl, this.today(), this.ttl, ...services],
     );
     if (status !== 'ok') throw new QueueError(detail as QueueErrorCode);
     await this.notify();
@@ -284,7 +290,7 @@ export class QueueStore {
     const [status, detail] = await this.run(
       COMPLETE,
       [this.key.counters(), this.key.stats(this.today()), this.key.counterLast()],
-      [this.prefix, counter, this.now(), outcome, this.svcTimesMax, this.finishedTtl, expectedId ?? '', this.ttl, this.statsTtl],
+      [this.prefix, counter, this.now(), outcome, this.svcTimesMax, this.finishedTtl, expectedId ?? '', this.ttl, this.statsTtl, this.today(), this.ttl],
     );
     if (status !== 'ok') {
       // A resident leaving mid-call clears the counter, which is worth broadcasting.
@@ -337,13 +343,15 @@ export class QueueStore {
   }
 
   /** Wipes all queue state for this office, keeping the office itself. */
+  /** Clears the live queue. Keeps the office's settings and its event history (analytics). */
   async reset(): Promise<void> {
     const keep = `${this.prefix}meta`;
+    const history = `${this.prefix}ev:`;
     let cursor = '0';
     do {
       const [next, keys] = await this.redis.scan(cursor, 'MATCH', `${this.prefix}*`, 'COUNT', 500);
       cursor = next;
-      const doomed = keys.filter((k) => k !== keep);
+      const doomed = keys.filter((k) => k !== keep && !k.startsWith(history));
       if (doomed.length) await this.redis.unlink(...doomed);
     } while (cursor !== '0');
     await this.notify();

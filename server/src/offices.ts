@@ -1,7 +1,8 @@
 import { createHash, randomBytes, randomInt, timingSafeEqual } from 'node:crypto';
 import type Redis from 'ioredis';
+import { AnalyticsStore, DEFAULT_ANALYTICS_DAYS, eventKeys } from './analytics';
 import { AppointmentBook } from './appointments';
-import { defaultConfig, normalizeSettings, withDefaults, type OfficeConfig } from './officeConfig';
+import { defaultConfig, normalizeSettings, withDefaults, zonedParts, type OfficeConfig } from './officeConfig';
 import { QueueError, QueueStore } from './queueStore';
 import { SAVE_CONFIG, TOUCH } from './scripts';
 
@@ -23,6 +24,8 @@ export interface OfficeStoreOptions {
   now?: () => number;
   /** Minimum gap between TTL refreshes for one office. */
   touchIntervalMs?: number;
+  /** How many days of ticket events (analytics) an active office keeps. */
+  analyticsDays?: number;
 }
 
 export interface CreatedOffice {
@@ -36,6 +39,7 @@ export interface CreatedOffice {
 export class OfficeStore {
   readonly root: string;
   readonly ttlSec: number;
+  readonly analyticsDays: number;
   private readonly now: () => number;
   private readonly touchIntervalMs: number;
   private readonly lastTouch = new Map<string, number>();
@@ -48,6 +52,7 @@ export class OfficeStore {
     this.ttlSec = opts.ttlSec ?? 30 * 24 * 60 * 60;
     this.now = opts.now ?? Date.now;
     this.touchIntervalMs = opts.touchIntervalMs ?? 60_000;
+    this.analyticsDays = opts.analyticsDays ?? DEFAULT_ANALYTICS_DAYS;
   }
 
   prefixFor(officeId: string): string {
@@ -103,6 +108,10 @@ export class OfficeStore {
 
   queue(officeId: string, config: OfficeConfig, opts: { now?: () => number } = {}): QueueStore {
     return new QueueStore(this.redis, { prefix: this.prefixFor(officeId), config, officeTtlSec: this.ttlSec, now: opts.now ?? this.now });
+  }
+
+  analytics(officeId: string, config: OfficeConfig): AnalyticsStore {
+    return new AnalyticsStore(this.redis, this.prefixFor(officeId), config, { retentionDays: this.analyticsDays, now: this.now });
   }
 
   appointments(officeId: string, config: OfficeConfig, opts: { now?: () => number } = {}): AppointmentBook {
@@ -167,5 +176,10 @@ export class OfficeStore {
     if (!opts.force && now - (this.lastTouch.get(officeId) ?? 0) < this.touchIntervalMs) return;
     this.lastTouch.set(officeId, now);
     await this.redis.eval(TOUCH, 0, this.prefixFor(officeId), String(this.ttlSec), ...config.services.map((s) => s.id));
+    // Event history within the retention window lives as long as the office;
+    // older days stop being refreshed and expire on their own.
+    const pipe = this.redis.pipeline();
+    for (const key of eventKeys(this.prefixFor(officeId), zonedParts(now, config.timezone).dateKey, this.analyticsDays)) pipe.expire(key, this.ttlSec);
+    await pipe.exec();
   }
 }

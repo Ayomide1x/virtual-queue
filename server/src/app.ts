@@ -128,7 +128,7 @@ export function createApp(opts: AppOptions) {
       name: body.name,
       timezone: body.timezone && isValidTimeZone(body.timezone) ? body.timezone : undefined,
     });
-    if (body.seed) await seedOffice(redis, { prefix: offices.prefixFor(created.officeId), config: created.config, officeTtlSec: offices.ttlSec });
+    if (body.seed) await seedOffice(redis, { prefix: offices.prefixFor(created.officeId), config: created.config, officeTtlSec: offices.ttlSec, historyDays: Math.min(60, offices.analyticsDays - 1) });
     res.status(201).json({ officeId: created.officeId, staffKey: created.staffKey, office: created.config, publicUrl, lanIp });
   });
 
@@ -343,6 +343,40 @@ export function createApp(opts: AppOptions) {
     res.json({ ok: true });
   });
 
+  // --- analytics (reads only the event history, never the live queue)
+  const rangeQuery = (req: Request) => ({
+    from: typeof req.query.from === 'string' && req.query.from ? req.query.from : undefined,
+    to: typeof req.query.to === 'string' && req.query.to ? req.query.to : undefined,
+  });
+  const analyticsFor = (res: Response) => offices.analytics(ctx(res).officeId, ctx(res).config);
+
+  staff.get('/analytics', async (req, res) => {
+    const { from, to } = rangeQuery(req);
+    const store = analyticsFor(res);
+    res.json({ ...(await store.report(from, to)), today: store.today(), retentionDays: store.retentionDays });
+  });
+
+  const sendCsv = (res: Response, name: string, body: string) =>
+    res
+      .type('text/csv; charset=utf-8')
+      .set('Cache-Control', 'no-store')
+      .attachment(name)
+      .send('\ufeff' + body); // BOM so Excel reads UTF-8 names correctly
+
+  staff.get('/analytics/events.csv', async (req, res) => {
+    const { from, to } = rangeQuery(req);
+    const store = analyticsFor(res);
+    const r = store.range(from, to);
+    sendCsv(res, `events-${ctx(res).officeId}-${r.from}-to-${r.to}.csv`, await store.eventsCsv(r.from, r.to));
+  });
+
+  staff.get('/analytics/visits.csv', async (req, res) => {
+    const { from, to } = rangeQuery(req);
+    const store = analyticsFor(res);
+    const r = store.range(from, to);
+    sendCsv(res, `tickets-${ctx(res).officeId}-${r.from}-to-${r.to}.csv`, await store.visitsCsv(r.from, r.to));
+  });
+
   staff.get('/appointments', async (req, res) => {
     const { book, config } = ctx(res);
     const date = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.date)) ? String(req.query.date) : zonedParts(Date.now(), config.timezone).dateKey;
@@ -365,7 +399,7 @@ export function createApp(opts: AppOptions) {
 
   staff.post('/seed', async (_req, res) => {
     const { officeId, config } = ctx(res);
-    await seedOffice(redis, { prefix: offices.prefixFor(officeId), config, officeTtlSec: offices.ttlSec });
+    await seedOffice(redis, { prefix: offices.prefixFor(officeId), config, officeTtlSec: offices.ttlSec, historyDays: Math.min(60, offices.analyticsDays - 1) });
     res.json({ ok: true });
   });
 

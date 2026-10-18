@@ -37,6 +37,8 @@ export const config = {
    */
   publicUrl: (process.env.PUBLIC_URL || (hostIp ? `http://${hostIp}:${publicPort}` : '')).replace(/\/+$/, '') || null,
   officeTtlSec: Number(process.env.OFFICE_TTL_DAYS ?? 30) * 24 * 60 * 60,
+  /** Days of ticket history (analytics) an active office keeps. */
+  analyticsDays: Math.max(7, Number(process.env.ANALYTICS_RETENTION_DAYS ?? 90)),
   rateLimits: {
     createOffice: parseRule(process.env.RATE_LIMIT_CREATE_OFFICE, { limit: 10, windowSec: 3600 }),
     join: parseRule(process.env.RATE_LIMIT_JOIN, { limit: 30, windowSec: 60 }),
