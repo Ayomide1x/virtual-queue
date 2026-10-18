@@ -1,33 +1,11 @@
-/** "about 8 min" style estimate for residents. */
-export function formatEstimate(sec: number | null | undefined): string {
-  if (sec == null) return '—';
-  if (sec < 60) return 'Less than a minute';
-  const min = Math.round(sec / 60);
-  if (min < 60) return `About ${min} min`;
-  const h = Math.floor(min / 60);
-  const m = min % 60;
-  return `About ${h} hr${m ? ` ${m} min` : ''}`;
-}
+import { formatEstimate as i18nEstimate, formatRange as i18nRange, formatRangeShort as i18nRangeShort } from '../i18n';
+import { en } from '../i18n/en';
+import type { WaitEstimate } from '../types';
 
-/** "8–12 min" (or "About 5 min" when the range is narrow) for residents. */
-export function formatRange(e: { lowSec: number; highSec: number; sec: number } | null | undefined): string {
-  if (!e) return '—';
-  if (e.highSec < 60) return 'Less than a minute';
-  const lo = Math.max(1, Math.round(e.lowSec / 60));
-  const hi = Math.max(lo, Math.round(e.highSec / 60));
-  if (hi - lo <= 1) return formatEstimate(e.sec);
-  if (hi >= 60) return `${formatMinutes(e.lowSec)}–${formatMinutes(e.highSec)}`;
-  return `${lo}–${hi} min`;
-}
-
-/** Compact range for dashboards: "8–12m". */
-export function formatRangeShort(e: { lowSec: number; highSec: number } | null | undefined): string {
-  if (!e) return '—';
-  if (e.highSec < 60) return '<1m';
-  const lo = Math.round(e.lowSec / 60);
-  const hi = Math.max(lo, Math.round(e.highSec / 60));
-  return lo === hi ? `${hi}m` : `${lo}–${hi}m`;
-}
+// Staff screens are English; resident pages use the versions in ../i18n with their language.
+export const formatEstimate = (sec: number | null | undefined) => i18nEstimate(en, sec);
+export const formatRange = (e: WaitEstimate | null | undefined) => i18nRange(en, e);
+export const formatRangeShort = (e: { lowSec: number; highSec: number } | null | undefined) => i18nRangeShort(en, e);
 
 /** Compact "12m" / "1h 5m" for dashboards. */
 export function formatMinutes(sec: number | null | undefined): string {
@@ -48,8 +26,8 @@ export function formatElapsed(ms: number): string {
   return h ? `${h}:${String(m).padStart(2, '0')}:${ss}` : `${m}:${ss}`;
 }
 
-export function formatClock(ts: number): string {
-  return new Date(ts).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+export function formatClock(ts: number, locale?: string): string {
+  return new Date(ts).toLocaleTimeString(locale ?? [], { hour: 'numeric', minute: '2-digit' });
 }
 
 /** Spell out a ticket number for speech: "D-042" -> "D, 0, 4, 2". */

@@ -33,7 +33,7 @@ describe('opening hours', () => {
   });
 
   it('is open during the day’s hours, and says until when', () => {
-    expect(openStatus(scheduled, nyc('2026-03-04T09:00:00'))).toEqual({ open: true, message: 'Open until 5:00 PM' });
+    expect(openStatus(scheduled, nyc('2026-03-04T09:00:00'))).toEqual({ open: true, message: 'Open until 5:00 PM', until: '17:00' });
     expect(openStatus(scheduled, nyc('2026-03-04T16:59:00')).open).toBe(true);
   });
 
@@ -41,12 +41,14 @@ describe('opening hours', () => {
     expect(openStatus(scheduled, nyc('2026-03-04T17:00:00'))).toEqual({
       open: false,
       message: 'Joining is closed right now. We open again tomorrow at 9:00 AM.',
+      reopens: { day: 'thu', time: '09:00', when: 'tomorrow' },
     });
     expect(openStatus(scheduled, nyc('2026-03-04T07:30:00')).message).toBe('Joining is closed right now. We open today at 9:00 AM.');
   });
 
   it('skips closed days (Friday evening → Monday)', () => {
     expect(openStatus(scheduled, nyc('2026-03-06T18:00:00')).message).toBe('Joining is closed right now. We open again Monday at 9:00 AM.');
+    expect(openStatus(scheduled, nyc('2026-03-06T18:00:00')).reopens).toEqual({ day: 'mon', time: '09:00', when: 'this_week' });
     expect(openStatus(scheduled, nyc('2026-03-07T12:00:00')).open).toBe(false); // Saturday
   });
 

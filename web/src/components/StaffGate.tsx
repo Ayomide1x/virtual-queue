@@ -88,7 +88,7 @@ function KeyForm({ invalid, onSubmit }: { invalid: boolean; onSubmit: (key: stri
     if (key) onSubmit(key);
   };
   return (
-    <main className="mx-auto max-w-lg px-6 py-12">
+    <main id="main" tabIndex={-1} className="outline-none mx-auto max-w-lg px-6 py-12">
       <h1 className="text-3xl font-extrabold text-navy-900">Staff access</h1>
       <p className="mt-2 text-lg text-muted">Open the staff link you were given, or paste it (or the staff key) below.</p>
       {invalid && (

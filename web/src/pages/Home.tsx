@@ -25,7 +25,7 @@ export default function Home() {
   return (
     <div className="min-h-screen">
       <Header title="Virtual Queue" />
-      <main className="mx-auto max-w-3xl px-4 py-10 sm:px-6">
+      <main id="main" tabIndex={-1} className="outline-none mx-auto max-w-3xl px-4 py-10 sm:px-6">
         {created ? (
           <Created office={created} onAnother={() => setCreated(null)} />
         ) : (
@@ -145,7 +145,9 @@ function CreateForm({ onCreated }: { onCreated: (o: CreatedOffice) => void }) {
 function Created({ office, onAnother }: { office: CreatedOffice; onAnother: () => void }) {
   const { base, reachable } = publicBase(office);
   const links = officeLinks(base, office.officeId, office.staffKey);
-  useEffect(() => window.scrollTo(0, 0), []);
+  useEffect(() => {
+    window.scrollTo(0, 0);
+  }, []);
   return (
     <div className="animate-fade-in">
       <div className="flex items-center gap-3">

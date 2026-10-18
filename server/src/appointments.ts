@@ -2,7 +2,8 @@ import { randomInt, randomUUID } from 'node:crypto';
 import type Redis from 'ioredis';
 import { bookableDates, formatDateLabel, formatZonedTime, slotsForDate, zonedParts, type OfficeConfig } from './officeConfig';
 import { QueueError, type QueueErrorCode, type QueueStore } from './queueStore';
-import { BOOK, CANCEL_APPT, CHECK_IN, EXPIRE_MISSED } from './scripts';
+import { DEFAULT_LANG, langOr, type Lang } from './i18n';
+import { BOOK, CANCEL_APPT, CHECK_IN, EXPIRE_MISSED, SET_LANG } from './scripts';
 
 export type AppointmentStatus = 'booked' | 'checked_in' | 'cancelled' | 'missed';
 
@@ -19,6 +20,8 @@ export interface Appointment {
   slotStart: number;
   status: AppointmentStatus;
   ticketId: string | null;
+  /** The resident's language, for reminders (and the ticket made at check-in). */
+  lang: Lang;
 }
 
 export interface AppointmentView {
@@ -115,7 +118,7 @@ export class AppointmentBook {
     });
   }
 
-  async book(input: { name: string; service: string; date: string; time: string }): Promise<AppointmentView> {
+  async book(input: { name: string; service: string; date: string; time: string; lang?: Lang }): Promise<AppointmentView> {
     this.assertEnabled();
     const name = input.name.trim().replace(/\s+/g, ' ');
     if (!name || name.length > 30) throw new QueueError('invalid', 'Please enter a first name (up to 30 characters).');
@@ -147,6 +150,7 @@ export class AppointmentBook {
       String(now),
       ref,
       String(ttl),
+      input.lang ?? DEFAULT_LANG,
     )) as [string, string?];
     if (status !== 'ok') throw new QueueError(detail as QueueErrorCode);
     await this.queue.notify();
@@ -171,7 +175,14 @@ export class AppointmentBook {
       slotStart,
       status,
       ticketId: h.ticketId || null,
+      lang: langOr(h.lang),
     };
+  }
+
+  /** Change the resident's language on an appointment. */
+  async setLanguage(id: string, lang: Lang): Promise<AppointmentView> {
+    if (!(await this.redis.eval(SET_LANG, 1, this.key.appt(id), lang))) throw new QueueError('not_found', 'Appointment not found.');
+    return (await this.view(id))!;
   }
 
   async view(id: string): Promise<AppointmentView | null> {

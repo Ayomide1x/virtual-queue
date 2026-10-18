@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react';
+import { useI18n } from '../i18n';
 import { useConnected } from '../lib/socket';
 
 /** Banner shown only when the live connection drops (after a short grace period). */
 export function ConnectionBanner({ dark = false }: { dark?: boolean }) {
   const connected = useConnected();
+  const { t } = useI18n();
   const [show, setShow] = useState(false);
   useEffect(() => {
     if (connected) return setShow(false);
@@ -19,20 +21,21 @@ export function ConnectionBanner({ dark = false }: { dark?: boolean }) {
       }`}
     >
       <span className="inline-block h-2.5 w-2.5 animate-pulse rounded-full bg-warning-dark" aria-hidden="true" />
-      Reconnecting… your place in line is safe.
+      {t.common.reconnecting}
     </div>
   );
 }
 
 export function LiveDot({ light = false }: { light?: boolean }) {
   const connected = useConnected();
+  const { t } = useI18n();
   return (
     <span className={`inline-flex items-center gap-2 text-sm font-semibold ${light ? 'text-white' : 'text-muted'}`}>
       <span
         className={`h-2.5 w-2.5 rounded-full ${connected ? 'bg-success' : 'animate-pulse bg-warning'}`}
         aria-hidden="true"
       />
-      {connected ? 'Live' : 'Reconnecting'}
+      {connected ? t.common.live : t.common.reconnectingShort}
     </span>
   );
 }

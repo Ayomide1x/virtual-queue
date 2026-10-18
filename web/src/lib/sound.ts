@@ -48,9 +48,14 @@ export function vibrate(pattern: number[] = [300, 120, 300, 120, 600]): void {
   if ('vibrate' in navigator && (activation?.hasBeenActive ?? true)) navigator.vibrate(pattern);
 }
 
-export function speak(text: string): void {
+/** Say `text` aloud with a voice for `lang` (a BCP 47 tag like "es-US"), if the device has one. */
+export function speak(text: string, lang = 'en-US'): void {
   if (!('speechSynthesis' in window)) return;
   const u = new SpeechSynthesisUtterance(text);
+  u.lang = lang;
+  const base = lang.split('-')[0];
+  const voices = window.speechSynthesis.getVoices();
+  u.voice = voices.find((v) => v.lang === lang) ?? voices.find((v) => v.lang.toLowerCase().startsWith(base)) ?? null;
   u.rate = 0.9;
   window.speechSynthesis.speak(u);
 }

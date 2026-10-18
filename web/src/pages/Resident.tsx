@@ -4,9 +4,9 @@ import { ConnectionBanner } from '../components/ConnectionStatus';
 import { Header } from '../components/Header';
 import { OfficeGate } from '../components/OfficeGate';
 import { ServiceBadge } from '../components/ServiceBadge';
-import { ApiError, officeApi } from '../lib/api';
 import { Link } from 'react-router-dom';
-import { formatClock, formatRange } from '../lib/format';
+import { errorText, formatRange, formatTime, hoursText, useI18n } from '../i18n';
+import { ApiError, officeApi } from '../lib/api';
 import { useChannel } from '../lib/socket';
 import { audioUnlocked, playChime, unlockAudio, vibrate } from '../lib/sound';
 import { useOfficeManifest } from '../lib/pwa';
@@ -70,7 +70,8 @@ function ResidentScreen({ officeId, initialOffice }: { officeId: string; initial
   const api = officeApi(officeId);
   const { data: lobby } = useChannel<LobbyState>({ officeId, role: 'lobby' }, 'lobby:state');
   const office = lobby?.office ?? initialOffice;
-  useTitle(`Join the line — ${office.name}`);
+  const { t, lang } = useI18n();
+  useTitle(t.join.pageTitle(office.name));
   const [ticketId, setTicketId] = useState<string | null>(storage.get);
   // "Add to Home Screen" opens this office, with this ticket.
   useOfficeManifest(officeId, ticketId ? `/o/${officeId}/join?ticket=${ticketId}` : undefined);
@@ -101,10 +102,21 @@ function ResidentScreen({ officeId, initialOffice }: { officeId: string; initial
   // Ticket expired, was reset, or the resident left from another tab.
   useEffect(() => {
     if (!ticketId || !live) return;
-    if (live.view === null) forget('Your previous ticket is no longer active. You can join the line again below.');
-    else if (live.view.ticket.status === 'left') forget('You have left the line.');
+    if (live.view === null) forget(t.join.noLongerActive);
+    else if (live.view.ticket.status === 'left') forget(t.join.left);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [live, ticketId]);
+
+  // Alerts and the lobby announcement use the ticket's language: keep it in step with the page.
+  const syncedLang = useRef<string | null>(null);
+  const ticketLang = view?.ticket.lang;
+  const active = view?.ticket.status === 'waiting' || view?.ticket.status === 'called';
+  useEffect(() => {
+    if (!ticketId || !active || !ticketLang || ticketLang === lang || syncedLang.current === `${ticketId}:${lang}`) return;
+    syncedLang.current = `${ticketId}:${lang}`;
+    api.setTicketLanguage(ticketId, lang).catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ticketId, active, ticketLang, lang]);
 
   // Unlock audio on the first tap anywhere, so the "your turn" chime can play later.
   useEffect(() => {
@@ -123,14 +135,14 @@ function ResidentScreen({ officeId, initialOffice }: { officeId: string; initial
   const status = ticketId && view ? view.ticket.status : null;
 
   return (
-    <div className={`flex min-h-screen flex-col ${status === 'called' ? 'bg-success-darker' : ''}`}>
-      <Header title="Virtual Queue" office={office.name} />
+    <div className={`flex min-h-screen flex-col ${status === 'called' ? 'on-dark bg-success-darker' : ''}`}>
+      <Header title={t.common.appName} office={office.name} languages />
       <ConnectionBanner />
-      <main className="mx-auto w-full max-w-md flex-1 px-4 pb-10 pt-6">
+      <main id="main" tabIndex={-1} className="mx-auto w-full max-w-md flex-1 px-4 pb-10 pt-6 outline-none">
         {!ticketId && (office.status.open ? <JoinForm api={api} lobby={lobby} office={office} onJoined={onJoined} notice={notice} /> : <Closed office={office} notice={notice} />)}
         {ticketId && !view && <LoadingTicket />}
-        {view && status === 'waiting' && <Waiting api={api} view={view} onLeft={() => forget('You have left the line.')} />}
-        {view && status === 'called' && <Called api={api} view={view} onLeft={() => forget('You have left the line.')} />}
+        {view && status === 'waiting' && <Waiting api={api} view={view} onLeft={() => forget(t.join.left)} />}
+        {view && status === 'called' && <Called api={api} view={view} onLeft={() => forget(t.join.left)} />}
         {view && (status === 'served' || status === 'no_show') && <Finished view={view} onDone={() => forget(null)} />}
       </main>
     </div>
@@ -138,10 +150,11 @@ function ResidentScreen({ officeId, initialOffice }: { officeId: string; initial
 }
 
 function LoadingTicket() {
+  const { t } = useI18n();
   return (
     <div className="card p-8 text-center" role="status">
       <div className="mx-auto mb-4 h-10 w-10 animate-spin rounded-full border-4 border-primary-light border-t-primary" aria-hidden="true" />
-      <p className="text-lg font-semibold">Finding your ticket…</p>
+      <p className="text-lg font-semibold">{t.join.findingTicket}</p>
     </div>
   );
 }
@@ -151,6 +164,8 @@ function LoadingTicket() {
 type Api = ReturnType<typeof officeApi>;
 
 function Closed({ office, notice }: { office: OfficeInfo; notice: string | null }) {
+  const i18n = useI18n();
+  const { t } = i18n;
   return (
     <div className="animate-fade-in space-y-6">
       {notice && (
@@ -165,9 +180,9 @@ function Closed({ office, notice }: { office: OfficeInfo; notice: string | null 
             <path d="M12 7v5l3 2" />
           </svg>
         </div>
-        <h1 className="text-3xl font-extrabold text-navy-900">The line is closed</h1>
-        <p className="mt-3 text-lg text-muted">{office.status.message ?? 'Joining is closed right now.'}</p>
-        <p className="mt-3 text-muted">This page will open automatically when the line reopens.</p>
+        <h1 className="text-3xl font-extrabold text-navy-900">{t.join.closedTitle}</h1>
+        <p className="mt-3 text-lg text-muted">{hoursText(office.status, i18n)}</p>
+        <p className="mt-3 text-muted">{t.join.closedAutoOpen}</p>
       </div>
     </div>
   );
@@ -190,26 +205,33 @@ function JoinForm({
   const [service, setService] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [invalid, setInvalid] = useState<'name' | 'service' | null>(null);
   const nameRef = useRef<HTMLInputElement>(null);
+  const servicesRef = useRef<HTMLFieldSetElement>(null);
+  const { t, lang } = useI18n();
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     void unlockAudio();
     if (!name.trim()) {
-      setError('Please enter your first name.');
+      setError(t.join.errorName);
+      setInvalid('name');
       nameRef.current?.focus();
       return;
     }
     if (!service) {
-      setError('Please choose a service.');
+      setError(t.join.errorService);
+      setInvalid('service');
+      servicesRef.current?.querySelector('input')?.focus();
       return;
     }
     setSubmitting(true);
     setError(null);
+    setInvalid(null);
     try {
-      onJoined(await api.join(name.trim(), service));
+      onJoined(await api.join(name.trim(), service, lang));
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Something went wrong. Please try again.');
+      setError(errorText(t, err));
     } finally {
       setSubmitting(false);
     }
@@ -218,8 +240,8 @@ function JoinForm({
   return (
     <form onSubmit={submit} noValidate className="animate-fade-in space-y-6">
       <div>
-        <h1 className="text-3xl font-extrabold text-navy-900">Join the line</h1>
-        <p className="mt-2 text-lg text-muted">Save your place from your phone. We’ll alert you here when it’s your turn.</p>
+        <h1 className="text-3xl font-extrabold text-navy-900">{t.join.title}</h1>
+        <p className="mt-2 text-lg text-muted">{t.join.intro}</p>
       </div>
 
       {notice && (
@@ -230,7 +252,7 @@ function JoinForm({
 
       <div>
         <label htmlFor="name" className="mb-2 block text-lg font-bold">
-          First name
+          {t.join.nameLabel}
         </label>
         <input
           ref={nameRef}
@@ -243,15 +265,16 @@ function JoinForm({
           value={name}
           onChange={(e) => setName(e.target.value)}
           className="block min-h-[56px] w-full rounded-md border-2 border-muted-light bg-white px-4 text-xl focus:border-primary"
-          aria-describedby="name-hint"
+          aria-describedby={invalid === 'name' ? 'name-hint join-error' : 'name-hint'}
+          aria-invalid={invalid === 'name' || undefined}
         />
         <p id="name-hint" className="mt-1 text-sm text-muted">
-          Only your first name — staff use it to greet you.
+          {t.join.nameHint}
         </p>
       </div>
 
-      <fieldset>
-        <legend className="mb-2 text-lg font-bold">What do you need help with?</legend>
+      <fieldset ref={servicesRef} aria-describedby={invalid === 'service' ? 'join-error' : undefined}>
+        <legend className="mb-2 text-lg font-bold">{t.join.serviceLegend}</legend>
         <div className="space-y-3">
           {office.services.map(({ id, name, code }) => {
             const s = lobby?.services.find((x) => x.id === id);
@@ -268,18 +291,20 @@ function JoinForm({
                   name="service"
                   value={id}
                   checked={selected}
-                  onChange={() => setService(id)}
+                  onChange={() => {
+                    setService(id);
+                    if (invalid === 'service') {
+                      setInvalid(null);
+                      setError(null);
+                    }
+                  }}
                   className="sr-only"
                 />
                 <ServiceBadge code={code} size="lg" tone={selected ? 'solid' : 'light'} />
                 <span className="flex-1">
                   <span className="block text-lg font-bold">{name}</span>
                   <span className="block text-sm text-muted">
-                    {s
-                      ? s.paused
-                        ? 'Temporarily paused — you can still join'
-                        : `${s.waitingCount} waiting · ${s.waitingCount === 0 ? 'No wait' : `${formatRange(s.estimate)} wait`}`
-                      : ' '}
+                    {s ? (s.paused ? t.join.paused : t.join.waitingNow(s.waitingCount, formatRange(t, s.estimate))) : '\u00a0'}
                   </span>
                 </span>
                 <span
@@ -295,13 +320,13 @@ function JoinForm({
       </fieldset>
 
       {error && (
-        <p role="alert" className="rounded-md border-l-8 border-danger-dark bg-danger-light p-4 font-semibold text-danger-dark">
+        <p id="join-error" role="alert" className="rounded-md border-l-8 border-danger-dark bg-danger-light p-4 font-semibold text-danger-dark">
           {error}
         </p>
       )}
 
       <button type="submit" className="btn-primary w-full min-h-[60px] text-xl" disabled={submitting}>
-        {submitting ? 'Getting your ticket…' : 'Get my ticket'}
+        {submitting ? t.join.submitting : t.join.submit}
       </button>
       {office.appointments.enabled && <AppointmentLinks officeId={api.officeId} />}
     </form>
@@ -310,6 +335,7 @@ function JoinForm({
 
 /** "Book an appointment" link, plus a shortcut to an appointment booked on this device. */
 function AppointmentLinks({ officeId }: { officeId: string }) {
+  const { t } = useI18n();
   const saved = (() => {
     try {
       return localStorage.getItem(`vq.appointment.${officeId}`);
@@ -319,14 +345,14 @@ function AppointmentLinks({ officeId }: { officeId: string }) {
   })();
   return (
     <div className="rounded-md border border-muted-lighter bg-white p-4 text-center">
-      <p className="text-muted">Prefer a set time?</p>
+      <p className="text-muted">{t.join.preferTime}</p>
       <div className="mt-2 flex flex-wrap justify-center gap-x-6 gap-y-2">
         <Link to={`/o/${officeId}/book`} className="font-bold text-primary underline underline-offset-4">
-          Book an appointment
+          {t.join.book}
         </Link>
         {saved && (
           <Link to={`/o/${officeId}/appointment/${saved}`} className="font-bold text-primary underline underline-offset-4">
-            View my appointment
+            {t.join.viewAppointment}
           </Link>
         )}
       </div>
@@ -337,9 +363,10 @@ function AppointmentLinks({ officeId }: { officeId: string }) {
 // ------------------------------------------------------------------- waiting
 
 function TicketNumber({ view, tone = 'light' }: { view: TicketView; tone?: 'light' | 'dark' }) {
+  const { t, locale } = useI18n();
   return (
     <div className="text-center">
-      <div className={`label ${tone === 'dark' ? 'text-success-light' : ''}`}>Your ticket</div>
+      <div className={`label ${tone === 'dark' ? 'text-white' : ''}`}>{t.ticket.yourTicket}</div>
       <div className={`tabular mt-1 text-7xl font-extrabold tracking-tight ${tone === 'dark' ? 'text-white' : 'text-navy-900'}`}>
         {view.ticket.number}
       </div>
@@ -347,11 +374,11 @@ function TicketNumber({ view, tone = 'light' }: { view: TicketView; tone?: 'ligh
       {(view.ticket.priority || view.ticket.kind === 'appointment') && (
         <div className="mt-3 flex flex-wrap justify-center gap-2">
           {view.ticket.priority && (
-            <span className={`rounded-full px-3 py-1 text-sm font-bold ${tone === 'dark' ? 'bg-white/15 text-white' : 'bg-navy-900 text-white'}`}>Priority service</span>
+            <span className={`rounded-full px-3 py-1 text-sm font-bold ${tone === 'dark' ? 'bg-white/15 text-white' : 'bg-navy-900 text-white'}`}>{t.common.priorityService}</span>
           )}
           {view.ticket.kind === 'appointment' && view.ticket.appointmentAt && (
             <span className={`rounded-full px-3 py-1 text-sm font-bold ${tone === 'dark' ? 'bg-white/15 text-white' : 'bg-primary-light text-navy-900'}`}>
-              Appointment · {formatClock(view.ticket.appointmentAt)}
+              {t.common.appointmentAt(formatTime(view.ticket.appointmentAt, locale))}
             </span>
           )}
         </div>
@@ -363,32 +390,42 @@ function TicketNumber({ view, tone = 'light' }: { view: TicketView; tone?: 'ligh
 function Waiting({ api, view, onLeft }: { api: Api; view: TicketView; onLeft: () => void }) {
   const { ahead, position, estimate } = view;
   const [soundOn, setSoundOn] = useState(audioUnlocked());
+  const { t } = useI18n();
+
+  // Tell screen reader users when they move up (the numbers on screen change silently).
+  const [announcement, setAnnouncement] = useState('');
+  const lastAhead = useRef(ahead);
+  useEffect(() => {
+    if (ahead !== null && position !== null && lastAhead.current !== null && ahead !== lastAhead.current) {
+      setAnnouncement(t.ticket.positionAnnouncement(position, ahead));
+    }
+    lastAhead.current = ahead;
+  }, [ahead, position, t]);
 
   return (
     <div className="animate-fade-in space-y-5">
-      <p className="text-xl">
-        Hi <strong>{view.ticket.name}</strong>, you’re in line.
+      <h1 className="text-xl font-normal">{t.ticket.hi(view.ticket.name)}</h1>
+      <p role="status" aria-atomic="true" className="sr-only">
+        {announcement}
       </p>
 
       <section className="card overflow-hidden" aria-labelledby="ticket-heading">
         <h2 id="ticket-heading" className="sr-only">
-          Your place in line
+          {t.ticket.placeHeading}
         </h2>
         <div className="border-b border-muted-lighter bg-primary-lighter px-6 py-6">
           <TicketNumber view={view} />
         </div>
-        <dl className="grid grid-cols-2 divide-x divide-muted-lighter" aria-live="polite" aria-atomic="true">
+        <dl className="grid grid-cols-2 divide-x divide-muted-lighter">
           <div className="p-5 text-center">
-            <dt className="label">Position</dt>
+            <dt className="label">{t.ticket.position}</dt>
             <dd className="tabular mt-1 text-4xl font-extrabold text-navy-900">{position ?? '—'}</dd>
-            <dd className="text-sm text-muted">{ahead === 0 ? 'You’re next!' : `${ahead} ${ahead === 1 ? 'person' : 'people'} ahead`}</dd>
+            <dd className="text-sm text-muted">{ahead === 0 ? t.ticket.youreNext : t.ticket.ahead(ahead ?? 0)}</dd>
           </div>
           <div className="p-5 text-center">
-            <dt className="label">Estimated wait</dt>
-            <dd className="mt-1 text-2xl font-extrabold leading-10 text-navy-900">
-              {ahead === 0 ? 'Any moment' : formatRange(estimate).replace('About ', '~')}
-            </dd>
-            <dd className="text-sm text-muted">{ahead === 0 ? 'updates live' : 'likely range · updates live'}</dd>
+            <dt className="label">{t.ticket.estimatedWait}</dt>
+            <dd className="mt-1 text-2xl font-extrabold leading-10 text-navy-900">{ahead === 0 ? t.ticket.anyMoment : t.time.approx(formatRange(t, estimate))}</dd>
+            <dd className="text-sm text-muted">{ahead === 0 ? t.ticket.updatesLive : t.ticket.likelyRange}</dd>
           </div>
         </dl>
       </section>
@@ -397,15 +434,15 @@ function Waiting({ api, view, onLeft }: { api: Api; view: TicketView; onLeft: ()
 
       {view.servicePaused && (
         <div role="status" className="rounded-md border-l-8 border-warning bg-warning-light p-4">
-          <p className="font-bold">This line is briefly paused.</p>
-          <p>You’ll keep your place. Staff will resume calling shortly.</p>
+          <p className="font-bold">{t.ticket.pausedTitle}</p>
+          <p>{t.ticket.pausedBody}</p>
         </div>
       )}
 
       <div className="rounded-md bg-white p-4 text-muted">
         <p>
-          <strong className="text-ink">Keep this page open</strong> (or turn on alerts above). Your phone will chime when it’s your turn. You can safely refresh — your
-          ticket is saved on this device.
+          <strong className="text-ink">{t.ticket.keepOpenStrong}</strong>
+          {t.ticket.keepOpenRest}
         </p>
         {!soundOn && (
           <button
@@ -417,7 +454,7 @@ function Waiting({ api, view, onLeft }: { api: Api; view: TicketView; onLeft: ()
               if (ok) playChime(0.2);
             }}
           >
-            <SpeakerIcon /> Turn on sound alerts
+            <SpeakerIcon /> {t.ticket.soundOn}
           </button>
         )}
       </div>
@@ -439,6 +476,18 @@ function LeaveButton({ api, ticketId, onLeft, tone = 'light' }: { api: Api; tick
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const { t } = useI18n();
+  const leaveButton = useRef<HTMLButtonElement>(null);
+  const returnFocus = useRef(false);
+  useEffect(() => {
+    // After "Keep my place", put focus back on the button that opened the question.
+    if (!confirming && returnFocus.current) leaveButton.current?.focus();
+    returnFocus.current = false;
+  }, [confirming]);
+  const keep = () => {
+    returnFocus.current = true;
+    setConfirming(false);
+  };
 
   const leave = async () => {
     setBusy(true);
@@ -449,7 +498,7 @@ function LeaveButton({ api, ticketId, onLeft, tone = 'light' }: { api: Api; tick
     } catch (err) {
       // Already gone (served / left elsewhere): treat as left.
       if (err instanceof ApiError && (err.code === 'not_active' || err.code === 'not_found')) onLeft();
-      else setError(err instanceof ApiError ? err.message : 'Could not leave the line. Please try again.');
+      else setError(errorText(t, err, t.ticket.leaveError));
     } finally {
       setBusy(false);
     }
@@ -457,28 +506,41 @@ function LeaveButton({ api, ticketId, onLeft, tone = 'light' }: { api: Api; tick
 
   if (!confirming) {
     return (
-      <button type="button" className={tone === 'dark' ? 'btn w-full border-2 border-white/70 text-white hover:bg-white/10' : 'btn-danger-outline w-full'} onClick={() => setConfirming(true)}>
-        Leave the line
+      <button
+        ref={leaveButton}
+        type="button"
+        className={tone === 'dark' ? 'btn w-full border-2 border-white/70 text-white hover:bg-white/10' : 'btn-danger-outline w-full'}
+        onClick={() => setConfirming(true)}
+      >
+        {t.ticket.leave}
       </button>
     );
   }
   return (
-    <div className="card animate-fade-in p-4 text-ink" role="alertdialog" aria-labelledby="leave-q">
+    <div
+      className="card animate-fade-in p-4 text-ink"
+      role="alertdialog"
+      aria-labelledby="leave-q"
+      aria-describedby="leave-body"
+      onKeyDown={(e) => e.key === 'Escape' && !busy && keep()}
+    >
       <p id="leave-q" className="text-lg font-bold">
-        Leave the line?
+        {t.ticket.leaveQuestion}
       </p>
-      <p className="text-muted">You’ll lose your place and need a new ticket to rejoin.</p>
+      <p id="leave-body" className="text-muted">
+        {t.ticket.leaveBody}
+      </p>
       {error && (
         <p role="alert" className="mt-2 font-semibold text-danger-dark">
           {error}
         </p>
       )}
       <div className="mt-4 grid grid-cols-2 gap-3">
-        <button type="button" className="btn-secondary" onClick={() => setConfirming(false)} disabled={busy} autoFocus>
-          Keep my place
+        <button type="button" className="btn-secondary" onClick={keep} disabled={busy} autoFocus>
+          {t.ticket.keepPlace}
         </button>
         <button type="button" className="btn bg-danger-dark text-white hover:bg-danger" onClick={leave} disabled={busy}>
-          {busy ? 'Leaving…' : 'Yes, leave'}
+          {busy ? t.ticket.leaving : t.ticket.confirmLeave}
         </button>
       </div>
     </div>
@@ -491,6 +553,7 @@ function Called({ api, view, onLeft }: { api: Api; view: TicketView; onLeft: () 
   const alerted = useRef<string | null>(null);
   const [soundOn, setSoundOn] = useState(audioUnlocked());
   const headingRef = useRef<HTMLHeadingElement>(null);
+  const { t } = useI18n();
 
   // Chime on the initial call and on each recall.
   useEffect(() => {
@@ -506,17 +569,22 @@ function Called({ api, view, onLeft }: { api: Api; view: TicketView; onLeft: () 
     const original = document.title;
     let on = true;
     const id = setInterval(() => {
-      document.title = on ? '🔔 It’s your turn!' : original;
+      document.title = on ? t.called.tabTitle : original;
       on = !on;
     }, 1000);
     return () => {
       clearInterval(id);
       document.title = original;
     };
-  }, []);
+  }, [t]);
 
   return (
-    <div className="animate-fade-in space-y-6 text-white" role="alert" aria-live="assertive">
+    <div className="animate-fade-in space-y-6 text-white">
+      {/* Short, so screen readers say it at once; the full page follows. */}
+      <p role="alert" className="sr-only">
+        {t.called.announce(view.counterName ?? '')}
+        {view.ticket.recallCount > 0 ? ` ${t.called.recalled}` : ''}
+      </p>
       <div className="mx-auto mt-2 flex h-24 w-24 animate-pulse-ring items-center justify-center rounded-full bg-success text-white">
         <svg viewBox="0 0 24 24" className="h-12 w-12" fill="none" stroke="currentColor" strokeWidth={2.2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
           <path d="M6 8a6 6 0 1 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.94 1.94 0 0 0 3.4 0" />
@@ -524,11 +592,11 @@ function Called({ api, view, onLeft }: { api: Api; view: TicketView; onLeft: () 
       </div>
       <div className="text-center">
         <h1 ref={headingRef} tabIndex={-1} className="text-4xl font-extrabold outline-none">
-          It’s your turn
+          {t.called.title}
         </h1>
-        <p className="mt-3 text-2xl">Please go to</p>
+        <p className="mt-3 text-2xl">{t.called.goTo}</p>
         <p className="mt-1 break-words text-6xl font-extrabold">{view.counterName}</p>
-        {view.ticket.recallCount > 0 && <p className="mt-3 text-lg font-semibold text-success-light">Staff are calling you again — please come now.</p>}
+        {view.ticket.recallCount > 0 && <p className="mt-3 text-lg font-semibold text-success-light">{t.called.recalled}</p>}
       </div>
       <div className="rounded-lg bg-white/10 p-5">
         <TicketNumber view={view} tone="dark" />
@@ -543,7 +611,7 @@ function Called({ api, view, onLeft }: { api: Api; view: TicketView; onLeft: () 
             if (ok) playChime();
           }}
         >
-          <SpeakerIcon /> Play alert sound
+          <SpeakerIcon /> {t.called.playSound}
         </button>
       )}
       <LeaveButton api={api} ticketId={view.ticket.id} onLeft={onLeft} tone="dark" />
@@ -555,6 +623,7 @@ function Called({ api, view, onLeft }: { api: Api; view: TicketView; onLeft: () 
 
 function Finished({ view, onDone }: { view: TicketView; onDone: () => void }) {
   const served = view.ticket.status === 'served';
+  const { t } = useI18n();
   return (
     <div className="card animate-fade-in space-y-4 p-6 text-center">
       <div className={`mx-auto flex h-16 w-16 items-center justify-center rounded-full ${served ? 'bg-success-light text-success-darker' : 'bg-warning-light text-warning-dark'}`}>
@@ -568,14 +637,10 @@ function Finished({ view, onDone }: { view: TicketView; onDone: () => void }) {
           </svg>
         )}
       </div>
-      <h1 className="text-3xl font-extrabold text-navy-900">{served ? 'You’re all set' : 'We missed you'}</h1>
-      <p className="text-lg text-muted">
-        {served
-          ? `Thank you for visiting, ${view.ticket.name}. Ticket ${view.ticket.number} is complete.`
-          : `We called ticket ${view.ticket.number} but didn’t see you at the counter. You can join the line again, or ask at the front desk.`}
-      </p>
+      <h1 className="text-3xl font-extrabold text-navy-900">{served ? t.finished.servedTitle : t.finished.missedTitle}</h1>
+      <p className="text-lg text-muted">{served ? t.finished.servedBody(view.ticket.name, view.ticket.number) : t.finished.missedBody(view.ticket.number)}</p>
       <button type="button" className="btn-primary w-full" onClick={onDone}>
-        {served ? 'Done' : 'Join the line again'}
+        {served ? t.finished.done : t.finished.joinAgain}
       </button>
     </div>
   );

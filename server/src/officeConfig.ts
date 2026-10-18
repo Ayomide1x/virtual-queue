@@ -62,6 +62,9 @@ export interface OpenStatus {
   open: boolean;
   /** Human-readable, e.g. "Open until 5:00 PM" or "We open again Monday at 9:00 AM." */
   message: string | null;
+  /** The same facts in structured form, so pages can say them in the resident's language. */
+  until?: string;
+  reopens?: { day: Weekday; time: string; when: 'today' | 'tomorrow' | 'this_week' | 'next_week' };
 }
 
 // ------------------------------------------------------------------ validation
@@ -238,10 +241,14 @@ export function openStatus(config: Pick<OfficeConfig, 'hoursEnabled' | 'hours' |
   const { weekday, minutes } = zonedParts(ts, config.timezone);
   const today = config.hours[weekday];
   if (today && minutes >= toMinutes(today.open) && minutes < toMinutes(today.close)) {
-    return { open: true, message: `Open until ${formatTime(today.close)}` };
+    return { open: true, message: `Open until ${formatTime(today.close)}`, until: today.close };
   }
   if (today && minutes < toMinutes(today.open)) {
-    return { open: false, message: `Joining is closed right now. We open today at ${formatTime(today.open)}.` };
+    return {
+      open: false,
+      message: `Joining is closed right now. We open today at ${formatTime(today.open)}.`,
+      reopens: { day: weekday, time: today.open, when: 'today' },
+    };
   }
   const idx = WEEKDAYS.indexOf(weekday);
   for (let i = 1; i <= 7; i++) {
@@ -249,7 +256,11 @@ export function openStatus(config: Pick<OfficeConfig, 'hoursEnabled' | 'hours' |
     const h = config.hours[day];
     if (h) {
       const when = i === 1 ? 'tomorrow' : i === 7 ? `next ${WEEKDAY_NAMES[day]}` : WEEKDAY_NAMES[day];
-      return { open: false, message: `Joining is closed right now. We open again ${when} at ${formatTime(h.open)}.` };
+      return {
+        open: false,
+        message: `Joining is closed right now. We open again ${when} at ${formatTime(h.open)}.`,
+        reopens: { day, time: h.open, when: i === 1 ? 'tomorrow' : i === 7 ? 'next_week' : 'this_week' },
+      };
     }
   }
   return { open: false, message: 'Joining is closed right now.' };

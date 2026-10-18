@@ -1,6 +1,8 @@
 # ---- build: compile the React app and the server ----
 FROM node:22-alpine AS build
 WORKDIR /app
+# The browser tests' Chrome isn't needed to build the image.
+ENV PUPPETEER_SKIP_DOWNLOAD=true
 COPY package.json package-lock.json ./
 COPY server/package.json server/
 COPY web/package.json web/

@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useId, useState } from 'react';
+import { useI18n } from '../i18n';
 
 async function copyText(text: string): Promise<boolean> {
   try {
@@ -20,18 +21,20 @@ async function copyText(text: string): Promise<boolean> {
 
 export function CopyField({ label, value, hint, secret = false }: { label: string; value: string; hint?: string; secret?: boolean }) {
   const [copied, setCopied] = useState(false);
-  const id = `copy-${label.replace(/\W+/g, '-').toLowerCase()}`;
+  const { t } = useI18n();
+  const id = useId();
   return (
     <div>
       <label htmlFor={id} className="mb-1 flex items-center gap-2 font-bold">
         {label}
-        {secret && <span className="rounded bg-warning-light px-1.5 py-0.5 text-xs font-bold uppercase tracking-wide text-ink">Private</span>}
+        {secret && <span className="rounded bg-warning-light px-1.5 py-0.5 text-xs font-bold uppercase tracking-wide text-ink">{t.common.private}</span>}
       </label>
       <div className="flex gap-2">
         <input
           id={id}
           readOnly
           value={value}
+          aria-describedby={hint ? `${id}-hint` : undefined}
           onFocus={(e) => e.currentTarget.select()}
           className="min-h-[48px] min-w-0 flex-1 rounded-md border-2 border-muted-lighter bg-muted-lightest px-3 font-mono text-sm"
         />
@@ -44,17 +47,21 @@ export function CopyField({ label, value, hint, secret = false }: { label: strin
               setTimeout(() => setCopied(false), 2000);
             }
           }}
-          aria-label={`Copy ${label}`}
+          aria-label={t.common.copyLabel(label)}
         >
-          {copied ? 'Copied' : 'Copy'}
+          {copied ? t.common.copied : t.common.copy}
         </button>
-        <a href={value} target="_blank" rel="noreferrer" className="btn-secondary hidden px-3 sm:inline-flex" aria-label={`Open ${label} in a new tab`}>
-          Open ↗
+        <a href={value} target="_blank" rel="noreferrer" className="btn-secondary hidden px-3 sm:inline-flex" aria-label={t.common.openInNewTab(label)}>
+          {t.common.open} <span aria-hidden="true">↗</span>
         </a>
       </div>
-      {hint && <p className="mt-1 text-sm text-muted">{hint}</p>}
+      {hint && (
+        <p id={`${id}-hint`} className="mt-1 text-sm text-muted">
+          {hint}
+        </p>
+      )}
       <span className="sr-only" aria-live="polite">
-        {copied ? `${label} copied` : ''}
+        {copied ? t.common.copiedLabel(label) : ''}
       </span>
     </div>
   );

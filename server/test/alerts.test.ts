@@ -1,6 +1,6 @@
 import type { AddressInfo } from 'node:net';
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { AlertSendError, LogEmailSender, maskEmail, type AlertMessage, type EmailSender, type PushSender, type PushSubscriptionJSON } from '../src/alerts/senders';
+import { AlertSendError, LogEmailSender, emailHtml, emailText, maskEmail, type AlertMessage, type EmailSender, type PushSender, type PushSubscriptionJSON } from '../src/alerts/senders';
 import { AlertService, type AlertServiceOptions } from '../src/alerts/service';
 import { createApp } from '../src/app';
 import type { OfficeConfig } from '../src/officeConfig';
@@ -201,7 +201,7 @@ describe('when alerts are sent', () => {
     await queue().recall(3);
     await settle();
     await settle();
-    expect(push.sent.map((s) => s.message)).toEqual([{ title: `It’s your turn: ${me.number}`, body: 'Please go to Counter 3 now.', url: expect.stringContaining(`/o/${officeId}/join?ticket=${me.id}`), tag: expect.any(String) }]);
+    expect(push.sent.map((s) => s.message)).toEqual([{ title: `It’s your turn: ${me.number}`, body: 'Please go to Counter 3 now.', url: expect.stringContaining(`/o/${officeId}/join?ticket=${me.id}`), tag: expect.any(String), lang: 'en', urgent: true }]);
     expect(email.sent.map((e) => e.message.body)).toEqual(['Please go to Counter 3 now.']);
   });
 
@@ -491,5 +491,60 @@ describe('end to end through the API', () => {
     const plain = await (await fetch(`${base}/o/${created.officeId}/manifest.webmanifest`)).json() as any;
     expect(plain).not.toHaveProperty('start_url');
     app.io.close();
+  });
+});
+
+describe('in the resident’s language', () => {
+  it('sends ticket alerts in Spanish to a resident who joined in Spanish', async () => {
+    const ahead = await line(4);
+    const me = (await queue().join('Lucía', 'license', { lang: 'es' })).ticket;
+    await alerts.setTicketContact(officeId, me.id, { push: SUB, email: EMAIL });
+    await alerts.drain();
+    expect(push.sent[0].message).toMatchObject({ title: 'Alertas activadas', lang: 'es' });
+
+    await queue().callNext(1, 'license');
+    await settle();
+    expect(push.sent[1].message).toMatchObject({ title: `Ya casi es su turno: ${me.number}`, body: expect.stringContaining('Hay 3 personas antes que usted'), lang: 'es' });
+
+    for (const c of [2, 3, 4]) await queue().callNext(c, 'license');
+    await queue().markServed(1);
+    await queue().callNext(1, 'license');
+    await settle();
+    expect(push.sent.at(-1)!.message).toMatchObject({ title: `Es su turno: ${me.number}`, body: 'Pase a Counter 1 ahora.' });
+    // Email uses the same language, in its template too.
+    const mail = email.sent.at(-1)!.message;
+    expect(mail.title).toBe(`Es su turno: ${me.number}`);
+    expect(emailHtml(mail)).toContain('<html lang="es">');
+    expect(emailHtml(mail)).toContain('Abrir');
+    expect(emailText(mail)).toContain('Su dirección se borra');
+    expect(ahead).toHaveLength(4);
+  });
+
+  it('follows a language change made after joining', async () => {
+    await line(4);
+    const me = (await queue().join('Sam', 'license')).ticket;
+    await alerts.setTicketContact(officeId, me.id, { push: SUB });
+    await alerts.drain();
+    expect(push.sent[0].message.title).toBe('Alerts are on');
+    await queue().setLanguage(me.id, 'es');
+    await queue().callNext(1, 'license');
+    await settle();
+    expect(push.sent.at(-1)!.message.title).toBe(`Ya casi es su turno: ${me.number}`);
+  });
+
+  it('reminds in Spanish with Spanish times and dates, and the checked-in ticket keeps the language', async () => {
+    const appt = (await book().book({ name: 'Ana', service: 'id', date: '2026-03-04', time: '12:00', lang: 'es' })).appointment;
+    expect(appt.lang).toBe('es');
+    await alerts.setAppointmentContact(officeId, appt.id, { push: SUB });
+    await alerts.drain();
+    expect(push.sent[0].message).toMatchObject({ title: 'Recordatorio programado', body: expect.stringContaining('miércoles, 4 de marzo') });
+    clock = at('11:00');
+    await alerts.drain();
+    await alerts.drain();
+    expect(push.sent[1].message.title).toMatch(/^Cita a las 12:00\s?p\.\s?m\.$/);
+
+    clock = at('11:55');
+    const ticketId = await book().checkIn(appt.id);
+    expect((await queue().getTicketView(ticketId))!.ticket.lang).toBe('es');
   });
 });

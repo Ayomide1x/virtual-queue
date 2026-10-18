@@ -121,7 +121,7 @@ function DayScreen({ officeId, staffKey, onForbidden, officeName }: { officeId: 
         </nav>
       </Header>
       <ConnectionBanner />
-      <main className="mx-auto max-w-4xl space-y-6 px-4 py-8 sm:px-6">
+      <main id="main" tabIndex={-1} className="outline-none mx-auto max-w-4xl space-y-6 px-4 py-8 sm:px-6">
         <div className="flex flex-wrap items-end justify-between gap-4">
           <div>
             <h1 className="text-3xl font-extrabold text-navy-900">Appointments</h1>

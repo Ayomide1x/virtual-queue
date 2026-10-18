@@ -1,3 +1,4 @@
+import type { Lang } from './i18n';
 import type { OfficeConfig, OpenStatus } from './officeConfig';
 
 export type TicketStatus = 'waiting' | 'called' | 'served' | 'no_show' | 'left';
@@ -29,6 +30,8 @@ export interface Ticket {
   kind: TicketKind;
   /** Slot start, for tickets created by appointment check-in. */
   appointmentAt: number | null;
+  /** The resident's language, for alerts and lobby announcements. */
+  lang: Lang;
 }
 
 export interface TicketView {
@@ -67,7 +70,7 @@ export interface CounterOutcome {
 export interface CounterState {
   counter: number;
   name: string;
-  ticket: { number: string; name: string; service: string; calledAt: number; recallCount: number } | null;
+  ticket: { number: string; name: string; service: string; calledAt: number; recallCount: number; lang: Lang } | null;
   last: CounterOutcome | null;
 }
 
@@ -78,6 +81,8 @@ export interface RecentCall {
   service: string;
   at: number;
   recall?: boolean;
+  /** Language to announce this call in (the resident's). */
+  lang?: Lang;
 }
 
 export interface ServiceState {
@@ -111,7 +116,7 @@ export interface StaffState {
 export interface LobbyState {
   office: OfficeInfo;
   services: Array<Pick<ServiceState, 'id' | 'code' | 'name' | 'paused' | 'waitingCount' | 'estimatedWaitSec' | 'estimate'>>;
-  nowServing: Array<{ counter: number; counterName: string; number: string; service: string; calledAt: number }>;
+  nowServing: Array<{ counter: number; counterName: string; number: string; service: string; calledAt: number; lang: Lang }>;
   recent: RecentCall[];
   serverNow: number;
 }

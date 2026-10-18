@@ -20,6 +20,14 @@
   :focus-visible {
     @apply outline outline-4 outline-offset-2 outline-focus;
   }
+  /* On dark or colored backgrounds the blue ring is hard to see: use white. */
+  .on-dark :focus-visible {
+    @apply outline-white;
+  }
+  /* "Larger text" setting: everything sized in rem grows by a quarter. */
+  html.text-large {
+    font-size: 125%;
+  }
 }
 
 @layer components {
@@ -55,6 +63,7 @@
   }
 }
 
+/* Respect "reduce motion": no fades, pulses, spins or smooth scrolling. */
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -62,5 +71,6 @@
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }

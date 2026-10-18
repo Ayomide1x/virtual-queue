@@ -20,9 +20,12 @@
     "zod": "^3.24.1"
   },
   "devDependencies": {
+    "@axe-core/puppeteer": "^4.14.0",
     "@types/express": "^5.0.0",
     "@types/node": "^22.10.0",
     "@types/web-push": "^3.6.4",
+    "axe-core": "^4.14.0",
+    "puppeteer": "^25.14.0",
     "socket.io-client": "^4.8.1",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",

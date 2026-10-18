@@ -1,5 +1,6 @@
-import { useEffect, useState, type FormEvent } from 'react';
-import { ApiError, officeApi, type AlertContact } from '../lib/api';
+import { useEffect, useId, useState, type FormEvent } from 'react';
+import { Rich, errorText, useI18n } from '../i18n';
+import { officeApi, type AlertContact } from '../lib/api';
 import { isIOS, pushSupport, subscribeToPush, useAlertsMeta } from '../lib/pwa';
 
 type Target = { kind: 'ticket' | 'appointment'; id: string };
@@ -17,6 +18,7 @@ export function AlertsOptIn({ officeId, target }: { officeId: string; target: Ta
   const [showEmail, setShowEmail] = useState(false);
   const support = pushSupport();
   const isTicket = target.kind === 'ticket';
+  const { t } = useI18n();
 
   const calls = isTicket
     ? { get: () => api.getTicketAlerts(target.id), set: api.setTicketAlerts.bind(null, target.id), remove: api.removeTicketAlerts.bind(null, target.id) }
@@ -37,17 +39,13 @@ export function AlertsOptIn({ officeId, target }: { officeId: string; target: Ta
     try {
       const result = await subscribeToPush(meta.push.publicKey!);
       if ('error' in result) {
-        setError(
-          result.error === 'denied'
-            ? 'Notifications are blocked for this site. Allow them in your browser or phone settings, or use email below.'
-            : 'Couldn’t turn on notifications on this device. You can use email instead.',
-        );
+        setError(result.error === 'denied' ? t.alerts.denied : t.alerts.failed);
         setShowEmail(true);
         return;
       }
       setContact(await calls.set({ push: result.subscription }));
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Couldn’t turn on notifications.');
+      setError(errorText(t, err, t.alerts.failedShort));
     } finally {
       setBusy(null);
     }
@@ -58,7 +56,7 @@ export function AlertsOptIn({ officeId, target }: { officeId: string; target: Ta
     try {
       setContact(await calls.remove(channel));
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Couldn’t update alerts.');
+      setError(errorText(t, err, t.alerts.updateFailed));
     }
   };
 
@@ -73,38 +71,32 @@ export function AlertsOptIn({ officeId, target }: { officeId: string; target: Ta
         </span>
         <div>
           <h2 id={`alerts-${target.id}`} className="text-lg font-bold text-navy-900">
-            {anyOn ? 'Alerts are on' : isTicket ? 'Get an alert when it’s almost your turn' : 'Get a reminder before your appointment'}
+            {anyOn ? t.alerts.onTitle : isTicket ? t.alerts.ticketTitle : t.alerts.apptTitle}
           </h2>
-          <p className="text-muted">
-            {isTicket
-              ? 'We’ll tell you when you’re 3 people away and when it’s your turn, so you can wait anywhere.'
-              : 'We’ll remind you an hour before, and alert you when it’s your turn after you check in.'}
-          </p>
+          <p className="text-muted">{isTicket ? t.alerts.ticketBody : t.alerts.apptBody}</p>
         </div>
       </div>
 
       {/* --- push --- */}
       {pushOffered &&
         (contact.push ? (
-          <StatusRow label="Notifications on for this device" onRemove={() => remove('push')} removeLabel="Turn off notifications" />
+          <StatusRow label={t.alerts.pushOn} onRemove={() => remove('push')} removeLabel={t.alerts.pushOff} />
         ) : support === 'ok' ? (
           <button type="button" className="btn-primary min-h-[56px] w-full text-lg" onClick={enablePush} disabled={busy === 'push'}>
-            <BellIcon /> {busy === 'push' ? 'Turning on…' : 'Notify me'}
+            <BellIcon /> {busy === 'push' ? t.alerts.turningOn : t.alerts.notifyMe}
           </button>
         ) : support === 'ios-install' ? (
           <IosInstallGuide />
         ) : (
           <p className="rounded-md bg-muted-lightest p-3 text-sm text-muted">
-            {support === 'insecure'
-              ? 'Phone notifications need a secure (https) connection, which this site isn’t using. Email works instead.'
-              : 'This browser can’t show notifications. Email works instead.'}
+            {support === 'insecure' ? t.alerts.insecure : t.alerts.unsupported}
           </p>
         ))}
 
       {/* --- email --- */}
       {meta.email.enabled &&
         (contact.email ? (
-          <StatusRow label={`We’ll email ${contact.email}`} onRemove={() => remove('email')} removeLabel="Stop emails" />
+          <StatusRow label={t.alerts.willEmail(contact.email)} onRemove={() => remove('email')} removeLabel={t.alerts.stopEmails} />
         ) : emailFirst || showEmail ? (
           <EmailForm
             busy={busy === 'email'}
@@ -115,7 +107,7 @@ export function AlertsOptIn({ officeId, target }: { officeId: string; target: Ta
               try {
                 setContact(await calls.set({ email }));
               } catch (err) {
-                setError(err instanceof ApiError ? err.message : 'Couldn’t save your email.');
+                setError(errorText(t, err, t.alerts.emailSaveFailed));
               } finally {
                 setBusy(null);
               }
@@ -123,7 +115,7 @@ export function AlertsOptIn({ officeId, target }: { officeId: string; target: Ta
           />
         ) : (
           <button type="button" className="font-semibold text-primary underline underline-offset-4" onClick={() => setShowEmail(true)}>
-            {contact.push ? 'Also email me' : 'Or get an email instead'}
+            {contact.push ? t.alerts.alsoEmail : t.alerts.emailInstead}
           </button>
         ))}
 
@@ -154,6 +146,8 @@ function StatusRow({ label, onRemove, removeLabel }: { label: string; onRemove: 
 
 function EmailForm({ onSubmit, busy, logOnly }: { onSubmit: (email: string) => void; busy: boolean; logOnly: boolean }) {
   const [email, setEmail] = useState('');
+  const { t } = useI18n();
+  const id = useId();
   const submit = (e: FormEvent) => {
     e.preventDefault();
     if (email.trim()) onSubmit(email.trim());
@@ -161,7 +155,7 @@ function EmailForm({ onSubmit, busy, logOnly }: { onSubmit: (email: string) => v
   return (
     <form onSubmit={submit} className="space-y-2" noValidate>
       <label htmlFor="alert-email" className="block font-bold">
-        Email address
+        {t.alerts.emailLabel}
       </label>
       <div className="flex gap-2">
         <input
@@ -172,15 +166,16 @@ function EmailForm({ onSubmit, busy, logOnly }: { onSubmit: (email: string) => v
           maxLength={254}
           value={email}
           onChange={(e) => setEmail(e.target.value)}
+          aria-describedby={`${id}-privacy`}
           className="min-h-[48px] min-w-0 flex-1 rounded-md border-2 border-muted-light bg-white px-3 text-lg focus:border-primary"
         />
         <button type="submit" className="btn-outline shrink-0" disabled={busy || !email.trim()}>
-          {busy ? 'Saving…' : 'Email me'}
+          {busy ? t.alerts.saving : t.alerts.emailMe}
         </button>
       </div>
-      <p className="text-sm text-muted">
-        Only used for these alerts. We delete it as soon as your visit ends.
-        {logOnly && ' (Demo mode: emails are written to the server log instead of being sent.)'}
+      <p id={`${id}-privacy`} className="text-sm text-muted">
+        {t.alerts.emailPrivacy}
+        {logOnly && t.alerts.demoMode}
       </p>
     </form>
   );
@@ -189,33 +184,35 @@ function EmailForm({ onSubmit, busy, logOnly }: { onSubmit: (email: string) => v
 /** Visual guide: iOS only allows web push for apps added to the home screen (iOS 16.4+). */
 export function IosInstallGuide() {
   const ipad = isIOS() && !/iPhone|iPod/.test(navigator.userAgent);
+  const { t } = useI18n();
   return (
     <div className="rounded-lg border-2 border-primary-light bg-primary-lighter p-4">
-      <p className="font-bold text-navy-900">To get notifications on your {ipad ? 'iPad' : 'iPhone'}, add this page to your Home Screen first:</p>
+      <p className="font-bold text-navy-900">{t.ios.intro(ipad ? t.ios.ipad : t.ios.iphone)}</p>
       <ol className="mt-3 space-y-3">
         <Step n={1} icon={<ShareIcon />}>
-          In Safari, tap <strong>Share</strong> {ipad ? 'at the top of the screen' : 'in the toolbar at the bottom'}.
+          <Rich text={t.ios.share(ipad)} />
         </Step>
         <Step n={2} icon={<AddIcon />}>
-          Scroll down and tap <strong>Add to Home Screen</strong>, then <strong>Add</strong>.
+          <Rich text={t.ios.add} />
         </Step>
         <Step n={3} icon={<img src="/icons/apple-touch-icon.png" alt="" className="h-9 w-9 rounded-lg" />}>
-          Open <strong>Queue</strong> from your Home Screen and tap <strong>Notify me</strong>. Your ticket comes with you.
+          <Rich text={t.ios.open} />
         </Step>
       </ol>
-      <p className="mt-3 text-sm text-muted">Needs iOS 16.4 or later. Prefer not to? Use email below.</p>
+      <p className="mt-3 text-sm text-muted">{t.ios.footer}</p>
     </div>
   );
 }
 
 function Step({ n, icon, children }: { n: number; icon: React.ReactNode; children: React.ReactNode }) {
+  const { t } = useI18n();
   return (
     <li className="flex items-center gap-3">
       <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-white text-primary shadow-sm" aria-hidden="true">
         {icon}
       </span>
       <span>
-        <span className="sr-only">Step {n}: </span>
+        <span className="sr-only">{t.ios.step(n)}</span>
         {children}
       </span>
     </li>

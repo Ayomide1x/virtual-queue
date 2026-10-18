@@ -1,4 +1,5 @@
 import webpush from 'web-push';
+import { ALERT_TEXTS, langOr, type Lang } from '../i18n';
 
 /** What an alert says, independent of channel. */
 export interface AlertMessage {
@@ -8,6 +9,10 @@ export interface AlertMessage {
   url: string;
   /** Notifications with the same tag replace each other on the device. */
   tag: string;
+  /** Language the text is in (the resident's). Defaults to English. */
+  lang?: Lang;
+  /** "It's your turn": the device keeps it on screen until dismissed. */
+  urgent?: boolean;
 }
 
 export interface PushSubscriptionJSON {
@@ -123,17 +128,19 @@ export class LogEmailSender implements EmailSender {
 }
 
 export function emailText(m: AlertMessage): string {
-  return `${m.body}\n\n${m.url}\n\nYou're getting this because you asked for alerts about your place in line. We delete your address when your visit ends.`;
+  return `${m.body}\n\n${m.url}\n\n${ALERT_TEXTS[langOr(m.lang)].emailFooter}`;
 }
 
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
 
 export function emailHtml(m: AlertMessage): string {
-  return `<!doctype html><html><body style="margin:0;padding:24px;background:#f0f0f0;font-family:-apple-system,Segoe UI,Roboto,sans-serif;color:#1b1b1b">
+  const lang = langOr(m.lang);
+  const t = ALERT_TEXTS[lang];
+  return `<!doctype html><html lang="${lang}"><body style="margin:0;padding:24px;background:#f0f0f0;font-family:-apple-system,Segoe UI,Roboto,sans-serif;color:#1b1b1b">
 <div style="max-width:480px;margin:0 auto;background:#fff;border-radius:8px;padding:24px;border:1px solid #dfe1e2">
 <h1 style="margin:0 0 12px;font-size:22px;color:#112f4e">${esc(m.title)}</h1>
 <p style="margin:0 0 20px;font-size:17px;line-height:1.5">${esc(m.body)}</p>
-<a href="${esc(m.url)}" style="display:inline-block;background:#005ea2;color:#fff;text-decoration:none;font-weight:700;padding:12px 20px;border-radius:6px">Open</a>
-<p style="margin:24px 0 0;font-size:13px;color:#565c65">You asked for alerts about your place in line. Your address is deleted when your visit ends.</p>
+<a href="${esc(m.url)}" style="display:inline-block;background:#005ea2;color:#fff;text-decoration:none;font-weight:700;padding:12px 20px;border-radius:6px">${esc(t.emailButton)}</a>
+<p style="margin:24px 0 0;font-size:13px;color:#565c65">${esc(t.emailFooter)}</p>
 </div></body></html>`;
 }

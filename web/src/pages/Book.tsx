@@ -1,10 +1,10 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Header } from '../components/Header';
 import { OfficeGate } from '../components/OfficeGate';
 import { ServiceBadge } from '../components/ServiceBadge';
+import { errorText, formatDateKey, formatHHMM, useI18n } from '../i18n';
 import { ApiError, officeApi } from '../lib/api';
-import { formatHHMM } from '../lib/format';
 import { useOfficeId } from '../lib/useOffice';
 import { useTitle } from '../lib/useTitle';
 import type { DayAvailability, OfficeInfo } from '../types';
@@ -14,8 +14,42 @@ export default function Book() {
   return <OfficeGate officeId={officeId}>{(data) => <BookScreen key={officeId} officeId={officeId} office={data.office} />}</OfficeGate>;
 }
 
+/**
+ * A card-style choice that is a real radio button underneath, so arrow keys,
+ * screen readers and the focus ring all work as they do for any radio group.
+ */
+function Choice({
+  name,
+  value,
+  checked,
+  disabled,
+  onChange,
+  className,
+  children,
+}: {
+  name: string;
+  value: string;
+  checked: boolean;
+  disabled?: boolean;
+  onChange: () => void;
+  className: string;
+  children: ReactNode;
+}) {
+  return (
+    <label
+      className={`cursor-pointer has-[:focus-visible]:outline has-[:focus-visible]:outline-4 has-[:focus-visible]:outline-offset-2 has-[:focus-visible]:outline-focus ${
+        disabled ? 'cursor-not-allowed' : ''
+      } ${className}`}
+    >
+      <input type="radio" name={name} value={value} checked={checked} disabled={disabled} onChange={onChange} className="sr-only" />
+      {children}
+    </label>
+  );
+}
+
 function BookScreen({ officeId, office }: { officeId: string; office: OfficeInfo }) {
-  useTitle(`Book an appointment — ${office.name}`);
+  const { t, lang, locale } = useI18n();
+  useTitle(t.book.pageTitle(office.name));
   const api = officeApi(officeId);
   const navigate = useNavigate();
   const [service, setService] = useState<string | null>(null);
@@ -25,6 +59,7 @@ function BookScreen({ officeId, office }: { officeId: string; office: OfficeInfo
   const [name, setName] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const nameRef = useRef<HTMLInputElement>(null);
 
   const loadSlots = (svc: string) => {
     setDays(null);
@@ -34,7 +69,7 @@ function BookScreen({ officeId, office }: { officeId: string; office: OfficeInfo
         setDays(r.days);
         setDate((d) => (d && r.days.some((x) => x.date === d) ? d : (r.days.find((x) => x.slots.some((s) => s.remaining > 0))?.date ?? r.days[0]?.date ?? null)));
       })
-      .catch((err) => setError(err instanceof ApiError ? err.message : 'Could not load appointment times.'));
+      .catch((err) => setError(errorText(t, err, t.book.loadFailed)));
   };
 
   useEffect(() => {
@@ -45,12 +80,16 @@ function BookScreen({ officeId, office }: { officeId: string; office: OfficeInfo
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
-    if (!service || !date || !time) return setError('Please choose a service, day and time.');
-    if (!name.trim()) return setError('Please enter your first name.');
+    if (!service || !date || !time) return setError(t.book.chooseAll);
+    if (!name.trim()) {
+      setError(t.join.errorName);
+      nameRef.current?.focus();
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
-      const view = await api.book({ name: name.trim(), service, date, time });
+      const view = await api.book({ name: name.trim(), service, date, time, lang });
       try {
         localStorage.setItem(`vq.appointment.${officeId}`, view.appointment.id);
       } catch {
@@ -58,7 +97,7 @@ function BookScreen({ officeId, office }: { officeId: string; office: OfficeInfo
       }
       navigate(`/o/${officeId}/appointment/${view.appointment.id}`);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Could not book. Please try again.');
+      setError(errorText(t, err, t.book.failed));
       if (err instanceof ApiError && err.code === 'slot_full') {
         setTime(null);
         loadSlots(service);
@@ -69,73 +108,86 @@ function BookScreen({ officeId, office }: { officeId: string; office: OfficeInfo
   };
 
   const day = days?.find((d) => d.date === date);
+  const dayLabel = (dateKey: string) => formatDateKey(dateKey, locale);
 
   return (
     <div className="min-h-screen">
-      <Header title="Book an appointment" office={office.name} />
-      <main className="mx-auto w-full max-w-md px-4 pb-12 pt-6">
+      <Header title={t.book.title} office={office.name} languages />
+      <main id="main" tabIndex={-1} className="mx-auto w-full max-w-md px-4 pb-12 pt-6 outline-none">
         {!office.appointments.enabled ? (
           <div className="card p-6 text-center">
-            <h1 className="text-2xl font-extrabold text-navy-900">Appointments aren’t available</h1>
-            <p className="mt-2 text-muted">This office isn’t taking appointments right now.</p>
+            <h1 className="text-2xl font-extrabold text-navy-900">{t.book.offTitle}</h1>
+            <p className="mt-2 text-muted">{t.book.offBody}</p>
             <Link to={`/o/${officeId}/join`} className="btn-primary mt-6">
-              Join the line instead
+              {t.book.joinInstead}
             </Link>
           </div>
         ) : (
           <form onSubmit={submit} className="animate-fade-in space-y-6" noValidate>
             <div>
-              <h1 className="text-3xl font-extrabold text-navy-900">Book an appointment</h1>
-              <p className="mt-2 text-lg text-muted">
-                Pick a time, then check in from your phone when you arrive. People with appointments go ahead of walk-ins who joined after their time.
-              </p>
+              <h1 className="text-3xl font-extrabold text-navy-900">{t.book.title}</h1>
+              <p className="mt-2 text-lg text-muted">{t.book.intro}</p>
             </div>
 
             <fieldset>
-              <legend className="mb-2 text-lg font-bold">1. What do you need help with?</legend>
+              <legend className="mb-2 text-lg font-bold">{t.book.step1}</legend>
               <div className="space-y-3">
                 {office.services.map((s) => (
-                  <label
+                  <Choice
                     key={s.id}
-                    className={`flex min-h-[64px] cursor-pointer items-center gap-4 rounded-lg border-2 bg-white p-4 has-[:focus-visible]:outline has-[:focus-visible]:outline-4 has-[:focus-visible]:outline-focus ${
+                    name="service"
+                    value={s.id}
+                    checked={service === s.id}
+                    onChange={() => setService(s.id)}
+                    className={`flex min-h-[64px] items-center gap-4 rounded-lg border-2 bg-white p-4 ${
                       service === s.id ? 'border-primary bg-primary-lighter' : 'border-muted-lighter hover:border-muted-light'
                     }`}
                   >
-                    <input type="radio" name="service" value={s.id} checked={service === s.id} onChange={() => setService(s.id)} className="sr-only" />
                     <ServiceBadge code={s.code} tone={service === s.id ? 'solid' : 'light'} />
                     <span className="flex-1 text-lg font-bold">{s.name}</span>
-                  </label>
+                  </Choice>
                 ))}
               </div>
             </fieldset>
 
             {service && (
               <fieldset>
-                <legend className="mb-2 text-lg font-bold">2. Choose a day</legend>
+                <legend className="mb-2 text-lg font-bold">{t.book.step2}</legend>
                 {!days ? (
                   <p className="text-muted" role="status">
-                    Loading times…
+                    {t.book.loadingTimes}
                   </p>
                 ) : (
-                  <div className="-mx-4 flex gap-2 overflow-x-auto px-4 pb-2" role="radiogroup" aria-label="Day">
+                  <div className="-mx-4 flex gap-2 overflow-x-auto px-4 pb-2 pt-1">
                     {days.map((d, i) => {
                       const open = d.slots.reduce((a, s) => a + (s.remaining > 0 ? 1 : 0), 0);
                       const selected = d.date === date;
                       return (
-                        <button
+                        <Choice
                           key={d.date}
-                          type="button"
-                          role="radio"
-                          aria-checked={selected}
-                          onClick={() => (setDate(d.date), setTime(null))}
+                          name="day"
+                          value={d.date}
+                          checked={selected}
+                          onChange={() => (setDate(d.date), setTime(null))}
                           className={`flex min-h-[64px] min-w-[88px] shrink-0 flex-col items-center justify-center rounded-lg border-2 px-3 py-2 ${
                             selected ? 'border-primary bg-primary text-white' : 'border-muted-lighter bg-white hover:border-muted-light'
                           }`}
                         >
-                          <span className="text-sm font-semibold">{i === 0 ? 'Today' : d.label.split(',')[0].slice(0, 3)}</span>
-                          <span className="font-bold">{d.label.split(', ')[1] ?? d.label}</span>
-                          <span className={`text-xs ${selected ? 'text-white/85' : 'text-muted'}`}>{open ? `${open} times` : 'Full / closed'}</span>
-                        </button>
+                          {/* Screen readers get the full date; the card shows a short form. */}
+                          <span className="sr-only">
+                            {i === 0 ? `${t.book.today}, ` : ''}
+                            {dayLabel(d.date)}, {t.book.timesOpen(open)}
+                          </span>
+                          <span aria-hidden="true" className="text-sm font-semibold capitalize">
+                            {i === 0 ? t.book.today : formatDateKey(d.date, locale, { weekday: 'short' })}
+                          </span>
+                          <span aria-hidden="true" className="font-bold">
+                            {formatDateKey(d.date, locale, { month: 'short', day: 'numeric' })}
+                          </span>
+                          <span aria-hidden="true" className={`text-xs ${selected ? 'text-white' : 'text-muted'}`}>
+                            {t.book.timesOpen(open)}
+                          </span>
+                        </Choice>
                       );
                     })}
                   </div>
@@ -145,30 +197,37 @@ function BookScreen({ officeId, office }: { officeId: string; office: OfficeInfo
 
             {day && (
               <fieldset>
-                <legend className="mb-2 text-lg font-bold">3. Choose a time · {day.label}</legend>
+                <legend className="mb-2 text-lg font-bold">{t.book.step3(dayLabel(day.date))}</legend>
                 {day.slots.length === 0 ? (
-                  <p className="rounded-md bg-white p-4 text-muted">No appointments on this day.</p>
+                  <p className="rounded-md bg-white p-4 text-muted">{t.book.noneThisDay}</p>
                 ) : (
-                  <div className="grid grid-cols-3 gap-2" role="radiogroup" aria-label="Time">
+                  <div className="grid grid-cols-3 gap-2">
                     {day.slots.map((s) => {
                       const full = s.remaining === 0;
                       const selected = s.time === time;
+                      const label = formatHHMM(s.time, locale);
                       return (
-                        <button
+                        <Choice
                           key={s.time}
-                          type="button"
-                          role="radio"
-                          aria-checked={selected}
+                          name="time"
+                          value={s.time}
+                          checked={selected}
                           disabled={full}
-                          onClick={() => setTime(s.time)}
+                          onChange={() => setTime(s.time)}
                           className={`flex min-h-[56px] flex-col items-center justify-center rounded-md border-2 px-1 ${
                             selected ? 'border-primary bg-primary text-white' : full ? 'border-muted-lighter bg-muted-lightest text-muted line-through' : 'border-muted-lighter bg-white hover:border-primary'
                           }`}
-                          aria-label={`${formatHHMM(s.time)}${full ? ', fully booked' : `, ${s.remaining} left`}`}
                         >
-                          <span className="font-bold">{formatHHMM(s.time)}</span>
-                          {!full && s.remaining <= 2 && <span className={`text-xs ${selected ? 'text-white/85' : 'text-muted'}`}>{s.remaining} left</span>}
-                        </button>
+                          <span className="font-bold">{label}</span>
+                          {full ? (
+                            <span className="sr-only">, {t.book.full}</span>
+                          ) : s.remaining <= 2 ? (
+                            <span className={`text-xs ${selected ? 'text-white' : 'text-muted'}`}>
+                              <span className="sr-only">, </span>
+                              {t.book.left(s.remaining)}
+                            </span>
+                          ) : null}
+                        </Choice>
                       );
                     })}
                   </div>
@@ -179,9 +238,10 @@ function BookScreen({ officeId, office }: { officeId: string; office: OfficeInfo
             {time && (
               <div>
                 <label htmlFor="book-name" className="mb-2 block text-lg font-bold">
-                  4. Your first name
+                  {t.book.step4}
                 </label>
                 <input
+                  ref={nameRef}
                   id="book-name"
                   autoComplete="given-name"
                   maxLength={30}
@@ -199,11 +259,11 @@ function BookScreen({ officeId, office }: { officeId: string; office: OfficeInfo
             )}
 
             <button type="submit" className="btn-primary min-h-[60px] w-full text-xl" disabled={busy || !time}>
-              {busy ? 'Booking…' : time && day ? `Book ${formatHHMM(time)}` : 'Book appointment'}
+              {busy ? t.book.booking : time && day ? t.book.bookAt(formatHHMM(time, locale)) : t.book.bookButton}
             </button>
             <p className="text-center">
               <Link to={`/o/${officeId}/join`} className="font-semibold text-primary underline underline-offset-4">
-                Join the line now instead
+                {t.book.joinNowInstead}
               </Link>
             </p>
           </form>

@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import type Redis from 'ioredis';
 import { openStatus, zonedParts, type OfficeConfig } from './officeConfig';
-import { CALL_NEXT, COMPLETE, JOIN, LEAVE, RECALL, SET_PRIORITY } from './scripts';
+import { DEFAULT_LANG, langOr, type Lang } from './i18n';
+import { CALL_NEXT, COMPLETE, JOIN, LEAVE, RECALL, SET_LANG, SET_PRIORITY } from './scripts';
 import {
   PRIORITY_REASONS,
   type CounterOutcome,
@@ -199,7 +200,7 @@ export class QueueStore {
 
   // ---------------------------------------------------------------- residents
 
-  async join(name: string, service: string, opts: { joinedAt?: number; ignoreHours?: boolean } = {}): Promise<TicketView> {
+  async join(name: string, service: string, opts: { joinedAt?: number; ignoreHours?: boolean; lang?: Lang } = {}): Promise<TicketView> {
     const cleanName = name.trim().replace(/\s+/g, ' ');
     if (!cleanName || cleanName.length > 30) throw new QueueError('invalid', 'Please enter a first name (up to 30 characters).');
     this.assertService(service);
@@ -219,11 +220,23 @@ export class QueueStore {
       joinedAt,
       this.seqTtl,
       this.ttl,
+      opts.lang ?? DEFAULT_LANG,
     ]);
     await this.notify();
     const view = await this.getTicketView(id);
     if (!view) throw new Error('Ticket vanished after join');
     return view;
+  }
+
+  /** Change the resident's language on an active ticket (alerts and announcements use it). */
+  async setLanguage(id: string, lang: Lang): Promise<TicketView> {
+    const view = await this.getTicketView(id);
+    if (!view || view.ticket.status === 'left' || view.ticket.status === 'served' || view.ticket.status === 'no_show') {
+      throw new QueueError('not_found', 'Ticket not found.');
+    }
+    await this.redis.eval(SET_LANG, 1, this.key.ticket(id), lang);
+    await this.notify();
+    return { ...view, ticket: { ...view.ticket, lang } };
   }
 
   /** Returns the status the ticket had before leaving. */
@@ -543,7 +556,7 @@ export class QueueStore {
         name: c.name,
         ticket:
           t && t.status === 'called'
-            ? { number: t.number, name: t.name, service: t.service, calledAt: t.calledAt ?? now, recallCount: t.recallCount }
+            ? { number: t.number, name: t.name, service: t.service, calledAt: t.calledAt ?? now, recallCount: t.recallCount, lang: t.lang }
             : null,
         last: counterLast[c.id] ? (JSON.parse(counterLast[c.id]) as CounterOutcome) : null,
       };
@@ -583,7 +596,7 @@ export function toLobbyState(state: StaffState): LobbyState {
     })),
     nowServing: state.counters
       .filter((c) => c.ticket)
-      .map((c) => ({ counter: c.counter, counterName: c.name, number: c.ticket!.number, service: c.ticket!.service, calledAt: c.ticket!.calledAt }))
+      .map((c) => ({ counter: c.counter, counterName: c.name, number: c.ticket!.number, service: c.ticket!.service, calledAt: c.ticket!.calledAt, lang: c.ticket!.lang }))
       .sort((a, b) => b.calledAt - a.calledAt),
     recent: state.recent,
     serverNow: state.serverNow,
@@ -607,5 +620,6 @@ function parseTicket(h: Record<string, string> | null | undefined): Ticket | nul
     priority: (h.priority as PriorityReason) || null,
     kind: (h.kind as TicketKind) || 'walkin',
     appointmentAt: num(h.appointmentAt),
+    lang: langOr(h.lang),
   };
 }

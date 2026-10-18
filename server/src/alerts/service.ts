@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type Redis from 'ioredis';
 import { z } from 'zod';
+import { ALERT_TEXTS, formatDateIn, formatTimeIn } from '../i18n';
 import type { OfficeConfig } from '../officeConfig';
 import type { OfficeStore } from '../offices';
 import { QueueError } from '../queueStore';
@@ -455,32 +456,20 @@ export class AlertService {
       const view = await this.offices.queue(job.officeId, config, { now: this.clock }).getTicketView(job.targetId);
       if (!view) return null;
       const t = view.ticket;
+      const lang = t.lang;
+      const tx = ALERT_TEXTS[lang];
       const url = `${base}/join?ticket=${job.targetId}`;
       if (job.type === 'near') {
         if (t.status !== 'waiting') return null;
-        const ahead = view.ahead ?? 0;
-        return {
-          title: `Almost your turn: ${t.number}`,
-          body:
-            ahead === 0
-              ? `You’re next at ${config.name}. Please be ready to go to the counter.`
-              : `${ahead} ${ahead === 1 ? 'person is' : 'people are'} ahead of you at ${config.name}. Please make your way back so you’re ready.`,
-          url,
-          tag,
-        };
+        return { title: tx.nearTitle(t.number), body: tx.nearBody(view.ahead ?? 0, config.name), url, tag, lang };
       }
       if (job.type === 'called') {
         if (t.status !== 'called') return null;
-        return { title: `It’s your turn: ${t.number}`, body: `Please go to ${view.counterName} now.`, url, tag };
+        return { title: tx.calledTitle(t.number), body: tx.calledBody(view.counterName ?? ''), url, tag, lang, urgent: true };
       }
       if (job.type === 'confirm') {
         if (t.status !== 'waiting' && t.status !== 'called') return null;
-        return {
-          title: 'Alerts are on',
-          body: `We’ll let you know when you’re ${this.o.nearThreshold} people away and when it’s your turn (ticket ${t.number}).`,
-          url,
-          tag: `${tag}-confirm`,
-        };
+        return { title: tx.confirmTitle, body: tx.confirmBody(this.o.nearThreshold, t.number), url, tag: `${tag}-confirm`, lang };
       }
       return null;
     }
@@ -488,22 +477,17 @@ export class AlertService {
     const view = await this.offices.appointments(job.officeId, config, { now: this.clock }).view(job.targetId);
     if (!view || view.appointment.status !== 'booked') return null;
     const a = view.appointment;
+    const lang = a.lang;
+    const tx = ALERT_TEXTS[lang];
+    const tz = config.timezone;
+    const time = formatTimeIn(lang, a.slotStart, tz);
     const url = `${base}/appointment/${job.targetId}`;
     if (job.type === 'reminder') {
-      return {
-        title: `Appointment at ${view.timeLabel}`,
-        body: `${a.serviceName} at ${config.name} in about an hour. Check in from your confirmation link when you arrive (from ${view.checkIn.opensLabel}).`,
-        url,
-        tag,
-      };
+      const opensAt = formatTimeIn(lang, view.checkIn.opensAt, tz);
+      return { title: tx.reminderTitle(time), body: tx.reminderBody(a.serviceName, config.name, opensAt), url, tag, lang };
     }
     if (job.type === 'confirm') {
-      return {
-        title: 'Reminder set',
-        body: `We’ll remind you before your ${view.timeLabel} appointment on ${view.dateLabel}, and alert you once you’ve checked in.`,
-        url,
-        tag: `${tag}-confirm`,
-      };
+      return { title: tx.reminderSetTitle, body: tx.reminderSetBody(time, formatDateIn(lang, a.slotStart, tz)), url, tag: `${tag}-confirm`, lang };
     }
     return null;
   }

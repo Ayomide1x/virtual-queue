@@ -31,18 +31,18 @@ end
 
 /**
  * KEYS[1] seq key
- * ARGV: prefix, id, name, service, code, joinedAt, seqTtl, ttl
+ * ARGV: prefix, id, name, service, code, joinedAt, seqTtl, ttl, lang
  * Returns the ticket number.
  */
 export const JOIN = `${SCORE_FN}
-local prefix, id, name, service, code, joinedAt, seqTtl, ttl = ARGV[1], ARGV[2], ARGV[3], ARGV[4], ARGV[5], ARGV[6], ARGV[7], ARGV[8]
+local prefix, id, name, service, code, joinedAt, seqTtl, ttl, lang = ARGV[1], ARGV[2], ARGV[3], ARGV[4], ARGV[5], ARGV[6], ARGV[7], ARGV[8], ARGV[9]
 local seq = redis.call('INCR', KEYS[1])
 redis.call('EXPIRE', KEYS[1], seqTtl)
 local number = code .. '-' .. string.format('%03d', ((seq - 1) % 999) + 1)
 local tk = prefix .. 'ticket:' .. id
 redis.call('HSET', tk,
   'id', id, 'number', number, 'name', name, 'service', service, 'kind', 'walkin',
-  'status', 'waiting', 'joinedAt', joinedAt, 'orderAt', joinedAt, 'seq', seq, 'recallCount', 0)
+  'status', 'waiting', 'joinedAt', joinedAt, 'orderAt', joinedAt, 'seq', seq, 'recallCount', 0, 'lang', lang)
 redis.call('EXPIRE', tk, ttl)
 local q = prefix .. 'queue:' .. service
 redis.call('ZADD', q, score(nil, joinedAt, seq), id)
@@ -88,7 +88,7 @@ for _ = 1, 1000 do
 
   local id = redis.call('ZPOPMIN', prefix .. 'queue:' .. bestSvc)[1]
   local tk = prefix .. 'ticket:' .. id
-  local t = redis.call('HMGET', tk, 'status', 'joinedAt', 'number')
+  local t = redis.call('HMGET', tk, 'status', 'joinedAt', 'number', 'lang')
   if t[1] == 'waiting' then
     redis.call('HSET', tk, 'status', 'called', 'counter', counter, 'calledAt', now)
     redis.call('EXPIRE', tk, ttl)
@@ -97,7 +97,7 @@ for _ = 1, 1000 do
     redis.call('HINCRBY', KEYS[4], bestSvc .. ':waitSum', math.max(0, now - tonumber(t[2])))
     redis.call('HINCRBY', KEYS[4], bestSvc .. ':waitCount', 1)
     redis.call('EXPIRE', KEYS[4], statsTtl)
-    redis.call('LPUSH', KEYS[3], cjson.encode({number = t[3], counter = tonumber(counter), service = bestSvc, at = now}))
+    redis.call('LPUSH', KEYS[3], cjson.encode({number = t[3], counter = tonumber(counter), service = bestSvc, at = now, lang = t[4] or nil}))
     redis.call('LTRIM', KEYS[3], 0, recentMax - 1)
     redis.call('EXPIRE', KEYS[3], ttl)
     -- Which counters serve which services, for wait estimates.
@@ -193,12 +193,12 @@ local prefix, counter, now, recentMax, ttl = ARGV[1], ARGV[2], tonumber(ARGV[3])
 local id = redis.call('HGET', KEYS[1], counter)
 if not id then return {'err', 'no_active'} end
 local tk = prefix .. 'ticket:' .. id
-local t = redis.call('HMGET', tk, 'status', 'number', 'service')
+local t = redis.call('HMGET', tk, 'status', 'number', 'service', 'lang')
 if t[1] ~= 'called' then return {'err', 'no_active'} end
 redis.call('HINCRBY', tk, 'recallCount', 1)
 redis.call('HSET', tk, 'recalledAt', now)
 redis.call('EXPIRE', tk, ttl)
-redis.call('LPUSH', KEYS[2], cjson.encode({number = t[2], counter = tonumber(counter), service = t[3], at = now, recall = true}))
+redis.call('LPUSH', KEYS[2], cjson.encode({number = t[2], counter = tonumber(counter), service = t[3], at = now, recall = true, lang = t[4] or nil}))
 redis.call('LTRIM', KEYS[2], 0, recentMax - 1)
 redis.call('EXPIRE', KEYS[2], ttl)
 return {'ok', id}
@@ -298,7 +298,7 @@ return {'err', 'not_found'}
 /**
  * Book an appointment slot, never exceeding its capacity.
  * KEYS[1] slot-count hash for the date, KEYS[2] appointments-by-date sorted set
- * ARGV: prefix, apptId, slotField, capacity, name, service, date, time, slotStart, now, ref, ttl
+ * ARGV: prefix, apptId, slotField, capacity, name, service, date, time, slotStart, now, ref, ttl, lang
  */
 export const BOOK = `
 local prefix, id, field, capacity = ARGV[1], ARGV[2], ARGV[3], tonumber(ARGV[4])
@@ -309,7 +309,7 @@ redis.call('HINCRBY', KEYS[1], field, 1)
 redis.call('EXPIRE', KEYS[1], ttl)
 local ak = prefix .. 'appt:' .. id
 redis.call('HSET', ak, 'id', id, 'ref', ARGV[11], 'name', ARGV[5], 'service', ARGV[6], 'date', ARGV[7], 'time', ARGV[8],
-  'slotStart', ARGV[9], 'status', 'booked', 'createdAt', ARGV[10])
+  'slotStart', ARGV[9], 'status', 'booked', 'createdAt', ARGV[10], 'lang', ARGV[13])
 redis.call('EXPIRE', ak, ttl)
 redis.call('ZADD', KEYS[2], ARGV[9], id)
 redis.call('EXPIRE', KEYS[2], ttl)
@@ -343,7 +343,7 @@ export const CHECK_IN = `${SCORE_FN}
 local prefix, apptId, now, early, late = ARGV[1], ARGV[2], tonumber(ARGV[3]), tonumber(ARGV[4]), tonumber(ARGV[5])
 local ticketId, service, code, seqTtl, ttl = ARGV[6], ARGV[7], ARGV[8], ARGV[9], ARGV[10]
 local ak = prefix .. 'appt:' .. apptId
-local a = redis.call('HMGET', ak, 'status', 'service', 'name', 'slotStart', 'ticketId')
+local a = redis.call('HMGET', ak, 'status', 'service', 'name', 'slotStart', 'ticketId', 'lang')
 if not a[1] then return {'err', 'not_found'} end
 if a[1] == 'checked_in' then return {'ok', a[5], 'existing'} end
 if a[1] ~= 'booked' then return {'err', 'not_active', a[1]} end
@@ -362,7 +362,7 @@ local number = code .. '-' .. string.format('%03d', ((seq - 1) % 999) + 1)
 local tk = prefix .. 'ticket:' .. ticketId
 redis.call('HSET', tk,
   'id', ticketId, 'number', number, 'name', a[3], 'service', service, 'kind', 'appointment', 'appointmentId', apptId,
-  'appointmentAt', slot, 'status', 'waiting', 'joinedAt', now, 'orderAt', slot, 'seq', seq, 'recallCount', 0)
+  'appointmentAt', slot, 'status', 'waiting', 'joinedAt', now, 'orderAt', slot, 'seq', seq, 'recallCount', 0, 'lang', a[6] or 'en')
 redis.call('EXPIRE', tk, ttl)
 local q = prefix .. 'queue:' .. service
 redis.call('ZADD', q, score(nil, slot, seq), ticketId)
@@ -438,4 +438,15 @@ for _, m in ipairs(ready) do
   redis.call('ZADD', KEYS[2], now + lease, m)
 end
 return ready
+`;
+
+/**
+ * Change the language on an existing ticket or appointment hash. Never creates
+ * the key (a plain HSET on an expired ticket would leave a key with no TTL).
+ * KEYS[1] ticket or appointment hash. ARGV: lang. Returns 1 if updated.
+ */
+export const SET_LANG = `
+if redis.call('EXISTS', KEYS[1]) == 0 then return 0 end
+redis.call('HSET', KEYS[1], 'lang', ARGV[1])
+return 1
 `;

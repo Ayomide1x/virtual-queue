@@ -56,8 +56,14 @@ export interface OfficeConfig {
 
 export interface OpenStatus {
   open: boolean;
+  /** English text from the server; pages build their own from the fields below. */
   message: string | null;
+  until?: string;
+  reopens?: { day: Weekday; time: string; when: 'today' | 'tomorrow' | 'this_week' | 'next_week' };
 }
+
+/** Resident languages. Mirrors server/src/i18n.ts LANGS. */
+export type Lang = 'en' | 'es';
 
 export interface OfficeInfo extends OfficeConfig {
   status: OpenStatus;
@@ -77,6 +83,7 @@ export interface Ticket {
   priority: PriorityReason | null;
   kind: TicketKind;
   appointmentAt: number | null;
+  lang: Lang;
 }
 
 export interface TicketView {
@@ -114,6 +121,7 @@ export interface RecentCall {
   service: string;
   at: number;
   recall?: boolean;
+  lang?: Lang;
 }
 
 export interface ServiceState {
@@ -146,7 +154,7 @@ export interface LobbyState {
   officeId: string;
   office: OfficeInfo;
   services: Array<Pick<ServiceState, 'id' | 'code' | 'name' | 'paused' | 'waitingCount' | 'estimatedWaitSec' | 'estimate'>>;
-  nowServing: Array<{ counter: number; counterName: string; number: string; service: string; calledAt: number }>;
+  nowServing: Array<{ counter: number; counterName: string; number: string; service: string; calledAt: number; lang: Lang }>;
   recent: RecentCall[];
   serverNow: number;
 }
@@ -178,6 +186,7 @@ export interface Appointment {
   slotStart: number;
   status: AppointmentStatus;
   ticketId: string | null;
+  lang: Lang;
 }
 
 export interface AppointmentView {

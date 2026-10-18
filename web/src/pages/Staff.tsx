@@ -62,7 +62,9 @@ function StaffScreen({ officeId, staffKey, onForbidden, initialName }: { officeI
   useEffect(() => {
     if (error === 'forbidden') onForbidden();
   }, [error, onForbidden]);
-  useEffect(() => rememberOffice(officeId, officeName), [officeId, officeName]);
+  useEffect(() => {
+    rememberOffice(officeId, officeName);
+  }, [officeId, officeName]);
 
   const setCounter = (n: number | null) => {
     storage.set(n);
@@ -114,7 +116,7 @@ function StaffScreen({ officeId, staffKey, onForbidden, initialName }: { officeI
 
 function CounterPicker({ state, onPick }: { state: StaffState; onPick: (n: number) => void }) {
   return (
-    <main className="mx-auto max-w-3xl px-6 py-12">
+    <main id="main" tabIndex={-1} className="outline-none mx-auto max-w-3xl px-6 py-12">
       <h1 className="text-3xl font-extrabold text-navy-900">Which counter are you at?</h1>
       <p className="mt-2 text-lg text-muted">You can change this at any time.</p>
       <div className="mt-8 grid grid-cols-2 gap-4 sm:grid-cols-3">
@@ -173,12 +175,28 @@ function Console({ api, officeId, counter, state }: { api: Api; officeId: string
   const noShow = () => current && act('noshow', () => api.noShow(counter, current.number), (t) => `${t.number} marked as no-show.`);
   const recall = () => current && act('recall', () => api.recall(counter), (t) => `Recalled ${t.number}.`);
 
-  // Keyboard shortcuts for fast counter work.
-  const handlers = useRef({ callNext, served, noShow, recall, callFrom, current });
-  handlers.current = { callNext, served, noShow, recall, callFrom, current };
+  // Keyboard shortcuts for fast counter work. They can be turned off, since
+  // single-letter keys clash with screen reader commands (WCAG 2.1.4).
+  const [shortcuts, setShortcutsState] = useState(() => {
+    try {
+      return localStorage.getItem('vq.staffShortcuts') !== 'off';
+    } catch {
+      return true;
+    }
+  });
+  const setShortcuts = (on: boolean) => {
+    setShortcutsState(on);
+    try {
+      localStorage.setItem('vq.staffShortcuts', on ? 'on' : 'off');
+    } catch {
+      /* not remembered */
+    }
+  };
+  const handlers = useRef({ callNext, served, noShow, recall, callFrom, current, shortcuts });
+  handlers.current = { callNext, served, noShow, recall, callFrom, current, shortcuts };
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.metaKey || e.ctrlKey || e.altKey || !handlers.current.shortcuts) return;
       const el = e.target as HTMLElement;
       if (['INPUT', 'SELECT', 'TEXTAREA'].includes(el.tagName) || el.isContentEditable) return;
       const h = handlers.current;
@@ -210,7 +228,7 @@ function Console({ api, officeId, counter, state }: { api: Api; officeId: string
           : null;
 
   return (
-    <main className="mx-auto grid max-w-7xl gap-6 px-4 py-6 sm:px-6 lg:grid-cols-12">
+    <main id="main" tabIndex={-1} className="outline-none mx-auto grid max-w-7xl gap-6 px-4 py-6 sm:px-6 lg:grid-cols-12">
       {/* Counter panel */}
       <section className="space-y-4 lg:col-span-4" aria-labelledby="counter-heading">
         <div className="card overflow-hidden">
@@ -271,28 +289,28 @@ function Console({ api, officeId, counter, state }: { api: Api; officeId: string
               className="btn-primary w-full min-h-[60px] text-xl"
               disabled={!canCall || !!busy}
               onClick={() => callNext(callFrom === 'any' ? undefined : callFrom)}
-              aria-keyshortcuts="N"
+              aria-keyshortcuts={shortcuts ? 'N' : undefined}
             >
               {busy === 'call' ? 'Calling…' : 'Call Next'}
-              <Kbd>N</Kbd>
+              {shortcuts && <Kbd>N</Kbd>}
             </button>
             {callHint && <p className="text-center text-sm text-muted">{callHint}</p>}
-            <button type="button" className="btn-success w-full" disabled={!current || !!busy} onClick={served} aria-keyshortcuts="S">
-              Mark Served <Kbd>S</Kbd>
+            <button type="button" className="btn-success w-full" disabled={!current || !!busy} onClick={served} aria-keyshortcuts={shortcuts ? 'S' : undefined}>
+              Mark Served {shortcuts && <Kbd>S</Kbd>}
             </button>
             <div className="grid grid-cols-2 gap-3">
-              <button type="button" className="btn-danger-outline px-3" disabled={!current || !!busy} onClick={noShow} aria-keyshortcuts="X">
-                No-Show <Kbd>X</Kbd>
+              <button type="button" className="btn-danger-outline px-3" disabled={!current || !!busy} onClick={noShow} aria-keyshortcuts={shortcuts ? 'X' : undefined}>
+                No-Show {shortcuts && <Kbd>X</Kbd>}
               </button>
-              <button type="button" className="btn-outline px-3" disabled={!current || !!busy} onClick={recall} aria-keyshortcuts="R">
-                Recall <Kbd>R</Kbd>
+              <button type="button" className="btn-outline px-3" disabled={!current || !!busy} onClick={recall} aria-keyshortcuts={shortcuts ? 'R' : undefined}>
+                Recall {shortcuts && <Kbd>R</Kbd>}
               </button>
             </div>
-            <div aria-live="polite">
+            {/* One live region that is always present, so every message gets announced. */}
+            <div role="status" aria-live="polite">
               {feedback && (
                 <div
                   key={feedback.at}
-                  role={feedback.kind === 'error' ? 'alert' : 'status'}
                   className={`animate-fade-in rounded-md border-l-8 p-4 font-semibold ${
                     feedback.kind === 'success'
                       ? 'border-success-dark bg-success-light text-success-darker'
@@ -305,6 +323,10 @@ function Console({ api, officeId, counter, state }: { api: Api; officeId: string
                 </div>
               )}
             </div>
+            <label className="flex items-center gap-2 text-sm text-muted">
+              <input type="checkbox" checked={shortcuts} onChange={(e) => setShortcuts(e.target.checked)} className="h-5 w-5 accent-primary" />
+              Keyboard shortcuts (N, S, X, R)
+            </label>
           </div>
         </div>
 
@@ -453,6 +475,17 @@ function WaitingRow({
   onError: (msg: string) => void;
 }) {
   const [busy, setBusy] = useState(false);
+  const toggleRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const panelId = `priority-${w.number}`;
+  // Keyboard: opening moves focus into the options; Escape closes and returns focus.
+  useEffect(() => {
+    if (open) panelRef.current?.querySelector<HTMLButtonElement>('button')?.focus();
+  }, [open]);
+  const close = () => {
+    onToggle();
+    toggleRef.current?.focus();
+  };
   const set = async (reason: PriorityReason | null) => {
     setBusy(true);
     try {
@@ -474,9 +507,11 @@ function WaitingRow({
           {formatElapsed(now - w.joinedAt)}
         </span>
         <button
+          ref={toggleRef}
           type="button"
           onClick={onToggle}
           aria-expanded={open}
+          aria-controls={open ? panelId : undefined}
           aria-label={`Priority options for ${w.number}`}
           title="Priority"
           className={`flex h-8 w-8 shrink-0 items-center justify-center rounded border ${w.priority ? 'border-navy-900 bg-navy-900 text-white' : 'border-muted-lighter text-muted hover:border-primary hover:text-primary'}`}
@@ -495,7 +530,19 @@ function WaitingRow({
         </div>
       )}
       {open && (
-        <div className="animate-fade-in border-t border-muted-lighter bg-muted-lightest px-4 py-3">
+        <div
+          ref={panelRef}
+          id={panelId}
+          role="group"
+          aria-label={`Priority for ${w.number}`}
+          className="animate-fade-in border-t border-muted-lighter bg-muted-lightest px-4 py-3"
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') {
+              e.stopPropagation();
+              close();
+            }
+          }}
+        >
           <p className="mb-2 text-sm font-semibold">{w.priority ? `Priority: ${PRIORITY_LABELS[w.priority]}. Change or remove:` : `Give ${w.number} priority because:`}</p>
           <div className="flex flex-wrap gap-2">
             {PRIORITY_REASONS.filter((r) => r !== w.priority).map((r) => (

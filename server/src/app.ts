@@ -7,6 +7,7 @@ import { Server as SocketServer } from 'socket.io';
 import { z } from 'zod';
 import type { AlertService } from './alerts/service';
 import type { AppointmentBook } from './appointments';
+import { LANGS } from './i18n';
 import { isValidTimeZone, openStatus, zonedParts, type OfficeConfig } from './officeConfig';
 import { isOfficeId, type OfficeStore } from './offices';
 import { QueueError, toLobbyState, type QueueStore } from './queueStore';
@@ -47,16 +48,20 @@ const createSchema = z
     seed: z.boolean().optional(),
   })
   .default({});
+const langSchema = z.enum(LANGS);
 const joinSchema = z.object({
   name: z.string().trim().min(1, 'Please enter your first name.').max(30, 'Name is too long.'),
   service: z.string().min(1, 'Please choose a service.').max(40),
+  lang: langSchema.optional(),
 });
 const bookSchema = z.object({
   name: z.string().trim().min(1, 'Please enter your first name.').max(30, 'Name is too long.'),
   service: z.string().min(1, 'Please choose a service.').max(40),
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Please choose a date.'),
   time: z.string().regex(/^\d{2}:\d{2}$/, 'Please choose a time.'),
+  lang: langSchema.optional(),
 });
+const setLangSchema = z.object({ lang: langSchema });
 const prioritySchema = z.object({
   number: z.string().min(1).max(10),
   reason: z.enum(PRIORITY_REASONS).nullable(),
@@ -161,8 +166,14 @@ export function createApp(opts: AppOptions) {
   });
 
   office.post('/tickets', rateLimit(redis, offices.root, 'join', limits.join), async (req, res) => {
-    const { name, service } = joinSchema.parse(req.body);
-    res.status(201).json(await ctx(res).store.join(name, service));
+    const { name, service, lang } = joinSchema.parse(req.body);
+    res.status(201).json(await ctx(res).store.join(name, service, { lang }));
+  });
+
+  // The resident switched language: alerts and lobby announcements follow.
+  office.put('/tickets/:ticketId/language', rateLimit(redis, offices.root, 'lang', limits.notify), async (req, res) => {
+    const { lang } = setLangSchema.parse(req.body);
+    res.json(await ctx(res).store.setLanguage(String(req.params.ticketId), lang));
   });
 
   office.get('/tickets/:ticketId', async (req, res) => {
@@ -246,6 +257,11 @@ export function createApp(opts: AppOptions) {
 
   office.post('/appointments', rateLimit(redis, offices.root, 'book', limits.book), async (req, res) => {
     res.status(201).json(await ctx(res).book.book(bookSchema.parse(req.body)));
+  });
+
+  office.put('/appointments/:apptId/language', rateLimit(redis, offices.root, 'lang', limits.notify), async (req, res) => {
+    const { lang } = setLangSchema.parse(req.body);
+    res.json(await ctx(res).book.setLanguage(String(req.params.apptId), lang));
   });
 
   office.get('/appointments/:apptId', async (req, res) => {

@@ -151,6 +151,47 @@ queue mutation ──► PUBLISH office event ──► scan (debounced)  ──
   - The API only ever returns masked addresses (`a******@g****.com`), and **logs never contain a full address**.
   - Push endpoints must belong to a known push service (Google, Mozilla, Microsoft, Apple), so the server never sends requests to arbitrary URLs.
 
+## Languages and accessibility
+
+### Languages
+
+Residents can switch between **English and Español** on the join, booking, appointment and lobby display pages, using the menu in the header. Each language is listed in its own language, so people can find theirs.
+
+- **The choice is remembered** on the device. The first visit follows the phone's language settings.
+- **The resident's language follows their ticket.** It's stored on the ticket or appointment (`lang`) when they join or book, and updated if they switch later (`PUT /api/o/:id/tickets/:ticketId/language`, `PUT …/appointments/:id/language`). A ticket created at appointment check-in inherits the appointment's language.
+  - **Push and email alerts** are written in that language, including times and dates (`miércoles, 4 de marzo · 12:00 p. m.`).
+  - **The lobby speaks each call in the called resident's language,** with a matching voice if the device has one ("Número D, 0, 1, 9, pase a Counter 1."), whatever language the TV screen itself shows.
+- **Staff pages stay in English.** Service and counter names are shown as staff typed them.
+- **Adding a language** (e.g. Vietnamese):
+  1. Copy `web/src/i18n/es.ts` to `vi.ts` and translate it. TypeScript fails the build if any phrase is missing.
+  2. Add a row to `LANGUAGES` in `web/src/i18n/index.tsx`.
+  3. Add `'vi'` to `Lang` in `web/src/types.ts`.
+  4. Add the code and its alert texts in `server/src/i18n.ts`.
+
+### Accessibility
+
+Checked against WCAG 2.2 AA with automated tests (see Tests).
+
+- **Screen readers:**
+  - Every control has a label, and each page has one `h1`.
+  - `<html lang>` matches the page's language.
+  - The service, day and time choices are real radio groups.
+  - The QR code is described.
+  - Error messages are tied to the field they're about.
+- **Live announcements:**
+  - "You're now number 2 in line. 1 person ahead of you." is read out when the resident moves up.
+  - "It's your turn. Please go to Counter 3." is read out at once when they're called, and focus moves to it.
+  - The lobby display and staff actions announce through status regions too.
+- **Keyboard:**
+  - A "Skip to main content" link comes first on every page.
+  - Everything works with Tab, Enter and Space, and arrow keys move through choices.
+  - Escape closes the leave and cancel questions and the staff priority menu, returning focus to the button that opened them.
+  - Following a link moves focus to the new page's heading.
+  - Staff single-key shortcuts (N, S, X, R) can be switched off on the console, because they clash with screen reader keys.
+- **Visible focus:** a thick ring on every control, white on dark and colored backgrounds.
+- **Larger text:** the **AA** button in the header scales the page's text by 25% and is remembered on the device. The layout reflows, with the header controls wrapping onto their own row. The lobby display is already sized for viewing across a room, so it doesn't change.
+- **Reduced motion:** when the device asks for less motion, fades, pulses and spinners are turned off.
+
 ## Local development
 
 Requires Node 20+ and Redis 6.2+ (`brew install redis && brew services start redis`, or `docker run -p 6379:6379 redis:7-alpine`).
@@ -177,7 +218,48 @@ docker run --rm -d -p 6399:6379 redis:7-alpine
 TEST_REDIS_URL=redis://127.0.0.1:6399 npm test
 ```
 
-**136 tests in nine files**, including:
+**220 tests in twelve files**, including:
+
+- `a11y.test.ts`: **axe-core on every page and state**, run in real Chrome against the real server.
+  - It checks the WCAG 2.2 A/AA rules plus axe's best-practice rules.
+  - Resident pages are checked in **English, Spanish and with Larger text on**.
+  - The states covered:
+    - the join form, with and without an error
+    - a closed line
+    - waiting, with the alerts card, the email form, the iPhone install guide and the leave question
+    - called, including a recall
+    - served
+    - booking with every step shown, and booking turned off
+    - an appointment: booked, cancel question, cancelled, not found
+    - the lobby display, open and closed
+    - an office that doesn't exist
+    - the home page, before and after creating an office
+    - the staff key prompt, including a wrong key
+    - the counter picker, and the console with the priority menu open
+    - settings and the appointments day view
+  - Each check also fails on any JavaScript error in the page.
+- `a11y-behaviour.test.ts`, in a real browser:
+  - the language menu: switching, remembering, `<html lang>`, and the phone's language on a first visit
+  - joining in Spanish stores Spanish on the ticket, and switching updates it
+  - the lobby speaks a Spanish resident's call in Spanish and an English resident's in English
+  - position announcements, and "your turn" said at once with focus moved
+  - joining with the keyboard alone, including the skip link and arrow keys
+  - a visible focus ring at every Tab stop
+  - Escape and focus return for the leave question and the staff priority menu
+  - staff shortcuts switched off
+  - focus moving on navigation
+  - Larger text scaling, being remembered, and not causing sideways scrolling
+  - reduced motion turning animations off
+- `language.test.ts`:
+  - the language is stored on tickets and appointments, with English as the default
+  - unknown languages are rejected
+  - a language can be changed only on active tickets, without creating Redis keys
+  - the lobby gets each call's language, and still no names
+- `alerts.test.ts` also checks Spanish alerts, including the email template, Spanish dates and times in reminders, a language change made after joining, and a checked-in ticket keeping its language.
+
+The browser tests build the web app themselves and use Chrome from puppeteer. If npm skipped puppeteer's download step, which recent npm versions do for install scripts, run `npx puppeteer browsers install chrome`, or point `CHROME_PATH` at an installed Chrome.
+
+From the alerts work:
 
 - `alerts.test.ts`, with fake push and email senders:
   - "3 away" sent once, including when people leave and the line jumps
@@ -321,7 +403,9 @@ web/public/       sw.js (push + notification clicks) · icons/
   network.ts      LAN IP detection
 server/test/      vitest suite (real Redis)
 web/src/pages/    Home · Resident · Book · Appointment · Staff · StaffAppointments · Display · Settings
-web/src/lib/      api client, socket hooks, clock sync, sound
+web/src/i18n/     en.ts (source text) · es.ts · index.tsx (language registry, provider, date/time formatting)
+web/src/lib/      api client, socket hooks, clock sync, sound, text size
+server/src/i18n.ts  languages the server accepts + alert texts in each
 ```
 
 ### Demo-scope limitations
@@ -329,6 +413,8 @@ web/src/lib/      api client, socket hooks, clock sync, sound
 - Staff access is a single shared key per office, with no individual accounts, no audit log and no key rotation. If the staff link leaks, create a new office.
 - Opening hours are one window per day, with no overnight hours or holidays. Appointment slots follow the same limits.
 - Alerts use free channels only, push and email. There is no SMS.
+- Staff pages are English-only. Service and counter names aren't translated.
+- The Spanish text was written for this demo and hasn't been reviewed by a professional translator. Have it reviewed before real use.
 - Web push needs HTTPS, so on a plain-http LAN demo phones get email instead. iPhones also need the site added to the Home Screen.
 - Waiting tickets created by the earlier version use the old scoring. Reseed or clear existing offices after upgrading.
 - Upgrading from the single-office version leaves its old `vq:*` keys in Redis unused. Run `docker compose down -v` for a clean slate.

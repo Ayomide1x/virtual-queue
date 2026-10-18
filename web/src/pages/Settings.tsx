@@ -200,7 +200,7 @@ function SettingsScreen({ officeId, staffKey, meta }: { officeId: string; staffK
           ← Staff console
         </Link>
       </Header>
-      <main className="mx-auto max-w-3xl space-y-6 px-4 py-8 sm:px-6">
+      <main id="main" tabIndex={-1} className="outline-none mx-auto max-w-3xl space-y-6 px-4 py-8 sm:px-6">
         <h1 className="text-3xl font-extrabold text-navy-900">Office settings</h1>
         {loadError && (
           <p role="alert" className="rounded-md border-l-8 border-danger-dark bg-danger-light p-4 font-semibold text-danger-dark">
