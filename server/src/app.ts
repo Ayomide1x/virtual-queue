@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
@@ -7,6 +8,8 @@ import { Server as SocketServer } from 'socket.io';
 import { z } from 'zod';
 import type { AlertService } from './alerts/service';
 import type { AppointmentBook } from './appointments';
+import { disabledErrorTracker, type ErrorTracker } from './errors';
+import { nullLogger, redactPath, type Logger } from './logger';
 import { LANGS } from './i18n';
 import { isValidTimeZone, openStatus, zonedParts, type OfficeConfig } from './officeConfig';
 import { isOfficeId, type OfficeStore } from './offices';
@@ -32,7 +35,20 @@ export interface AppOptions {
   hoursTickMs?: number;
   /** Push/email alerts. Without it, the alert endpoints report alerts as unavailable. */
   alerts?: AlertService;
+  logger?: Logger;
+  errors?: ErrorTracker;
+  /** Reported by /health. */
+  version?: string;
+  /** Errors reported by browsers, per IP. */
+  clientErrorLimit?: RateLimitRule;
 }
+
+const clientErrorSchema = z.object({
+  message: z.string().max(1000),
+  stack: z.string().max(4000).optional(),
+  url: z.string().max(500).optional(),
+  kind: z.enum(['error', 'unhandledrejection', 'react']).optional(),
+});
 
 interface OfficeLocals {
   officeId: string;
@@ -84,13 +100,55 @@ const NOT_FOUND_MESSAGE = 'This office doesn’t exist or has expired. Offices a
 
 export function createApp(opts: AppOptions) {
   const { redis, subscriber, offices, publicUrl, lanIp, webDist, alerts } = opts;
+  const log = opts.logger ?? nullLogger;
+  const errors = opts.errors ?? disabledErrorTracker;
+  const startedAt = Date.now();
+  let draining = false;
   const app = express();
   const server = http.createServer(app);
+  // Keep idle connections open longer than any proxy in front of us (Caddy keeps
+  // upstream connections up to 2 min, nginx 60 s). With Node's default of 5 s, a
+  // request sent just as the server closes an idle connection fails with
+  // "connection reset" (seen in load tests) or a 502 from the proxy.
+  server.keepAliveTimeout = 125_000;
+  server.headersTimeout = 126_000;
   const io = new SocketServer(server, { cors: { origin: true } });
 
   app.disable('x-powered-by');
   if (opts.trustProxy !== undefined) app.set('trust proxy', opts.trustProxy);
   app.use(express.json({ limit: '32kb' }));
+
+  // Request ids and one structured log line per request. Paths are redacted:
+  // ticket and appointment ids in URLs are secrets, and query strings are dropped.
+  const httpLog = log.child({ component: 'http' });
+  app.use((req, res, next) => {
+    const id = (req.get('x-request-id') ?? '').replace(/[^\w-]/g, '').slice(0, 64) || randomUUID().slice(0, 8);
+    res.locals.requestId = id;
+    res.setHeader('X-Request-Id', id);
+    const start = process.hrtime.bigint();
+    res.on('finish', () => {
+      const ms = Math.round(Number(process.hrtime.bigint() - start) / 1e5) / 10;
+      const p = redactPath(req.originalUrl);
+      const fields = { method: req.method, path: p, status: res.statusCode, ms, requestId: id, officeId: res.locals.office?.officeId };
+      if (res.statusCode >= 500) httpLog.error('request failed', fields);
+      else if (p.startsWith('/api/') && !p.endsWith('/health')) httpLog.info('request', fields);
+      else httpLog.debug('request', fields);
+    });
+    next();
+  });
+
+  // Liveness and readiness in one: 200 when Redis answers, 503 when it doesn't
+  // or while the server is shutting down (so a proxy stops sending traffic).
+  const health = async (_req: Request, res: Response) => {
+    const t0 = Date.now();
+    const ok = (await Promise.race([redis.ping().catch(() => null), new Promise((r) => setTimeout(() => r(null), 1000))])) === 'PONG';
+    const status = draining ? 'shutting_down' : ok ? 'ok' : 'redis_unavailable';
+    res
+      .status(status === 'ok' ? 200 : 503)
+      .set('Cache-Control', 'no-store')
+      .json({ status, ok: status === 'ok', redis: { ok, latencyMs: ok ? Date.now() - t0 : null }, uptimeSec: Math.round((Date.now() - startedAt) / 1000), version: opts.version ?? null });
+  };
+  app.get('/health', health);
 
   const limits = {
     createOffice: opts.rateLimits?.createOffice ?? { limit: 10, windowSec: 3600 },
@@ -106,9 +164,22 @@ export function createApp(opts: AppOptions) {
   // ----------------------------------------------------------------- REST API
   const api = express.Router();
 
-  api.get('/health', async (_req, res) => {
-    const ok = (await redis.ping().catch(() => null)) === 'PONG';
-    res.status(ok ? 200 : 503).json({ ok, redis: ok });
+  api.get('/health', health);
+
+  // Browsers report crashes here (see web/src/lib/errorReporting.ts), so they
+  // show up in the logs and error tracking alongside server errors.
+  const webLog = log.child({ component: 'web' });
+  api.post('/client-errors', rateLimit(redis, offices.root, 'clienterr', opts.clientErrorLimit ?? { limit: 20, windowSec: 600 }), (req, res) => {
+    const parsed = clientErrorSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: 'invalid', message: 'Invalid error report.' });
+    const { message, stack, url, kind } = parsed.data;
+    const where = url ? redactPath(url.replace(/^https?:\/\/[^/]+/, '')) : undefined;
+    webLog.warn('browser error', { message, kind, path: where, requestId: res.locals.requestId });
+    const err = new Error(message);
+    err.name = 'BrowserError';
+    if (stack) err.stack = stack;
+    errors.capture(err, { source: 'web', path: where, requestId: res.locals.requestId, extra: { kind } });
+    res.status(204).end();
   });
 
   api.get('/meta', (_req, res) => {
@@ -141,7 +212,7 @@ export function createApp(opts: AppOptions) {
     if (!config) return res.status(404).json({ error: 'office_not_found', message: NOT_FOUND_MESSAGE });
     const locals: OfficeLocals = { officeId, config, store: offices.queue(officeId, config), book: offices.appointments(officeId, config) };
     res.locals.office = locals;
-    void offices.touch(officeId, config).catch((err) => console.error('touch failed', err));
+    void offices.touch(officeId, config).catch((err) => log.warn('touch failed', { officeId, err }));
     next();
   });
 
@@ -435,7 +506,7 @@ export function createApp(opts: AppOptions) {
     });
   }
 
-  app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
+  app.use((err: unknown, req: Request, res: Response, _next: NextFunction) => {
     if (err instanceof QueueError) {
       const status = err.code === 'not_found' ? 404 : err.code === 'invalid' ? 400 : 409;
       return res.status(status).json({ error: err.code, message: err.message });
@@ -446,8 +517,10 @@ export function createApp(opts: AppOptions) {
     if (err instanceof SyntaxError) {
       return res.status(400).json({ error: 'invalid', message: 'Malformed JSON.' });
     }
-    console.error(err);
-    res.status(500).json({ error: 'server_error', message: 'Something went wrong. Please try again.' });
+    const requestId = res.locals.requestId as string | undefined;
+    log.error('unhandled error', { err, requestId, path: redactPath(req.originalUrl), officeId: res.locals.office?.officeId });
+    errors.capture(err, { source: 'http', requestId, path: req.originalUrl, officeId: res.locals.office?.officeId });
+    res.status(500).json({ error: 'server_error', message: 'Something went wrong. Please try again.', requestId });
   });
 
   // ---------------------------------------------------------------- real time
@@ -477,7 +550,8 @@ export function createApp(opts: AppOptions) {
         // Send current state straight away, so (re)connecting clients are never stale.
         await sendTo(socket.id, sub, offices.queue(sub.officeId, config));
       } catch (err) {
-        console.error('subscribe failed', err);
+        log.error('subscribe failed', { err, officeId: sub.officeId, role: sub.role });
+        errors.capture(err, { source: 'socket', officeId: sub.officeId });
       }
     });
     socket.on('unsubscribe', (raw: unknown) => {
@@ -489,6 +563,10 @@ export function createApp(opts: AppOptions) {
   const inFlight = new Set<string>();
   const dirty = new Set<string>();
   const timers = new Map<string, NodeJS.Timeout>();
+  // What each ticket room was last sent, so unchanged views aren't re-sent to
+  // every phone on every change in the office (most changes move only some people).
+  const lastTicketView = new Map<string, string>();
+  io.of('/').adapter.on('delete-room', (room: string) => lastTicketView.delete(room));
 
   async function broadcast(officeId: string) {
     if (inFlight.has(officeId)) {
@@ -509,10 +587,18 @@ export function createApp(opts: AppOptions) {
         const ticketPrefix = `${officeId}:ticket:`;
         const ticketIds = [...io.sockets.adapter.rooms.keys()].filter((r) => r.startsWith(ticketPrefix)).map((r) => r.slice(ticketPrefix.length));
         const views = await store.getTicketViews(ticketIds);
-        for (const [id, view] of views) io.to(`${ticketPrefix}${id}`).emit('ticket:update', { officeId, id, view });
+        for (const [id, view] of views) {
+          const room = `${ticketPrefix}${id}`;
+          // serverNow changes every time; compare everything else.
+          const fingerprint = JSON.stringify(view ? { ...view, serverNow: 0 } : null);
+          if (lastTicketView.get(room) === fingerprint) continue;
+          lastTicketView.set(room, fingerprint);
+          io.to(room).emit('ticket:update', { officeId, id, view });
+        }
       } while (dirty.has(officeId));
     } catch (err) {
-      console.error('broadcast failed', err);
+      log.error('broadcast failed', { err, officeId });
+      errors.capture(err, { source: 'broadcast', officeId });
     } finally {
       inFlight.delete(officeId);
     }
@@ -575,5 +661,31 @@ export function createApp(opts: AppOptions) {
   hoursTimer.unref();
   server.on('close', () => clearInterval(hoursTimer));
 
-  return { app, server, io, broadcast };
+  /**
+   * Graceful shutdown, step one: report "shutting down" on /health, stop
+   * timers, stop accepting connections, disconnect sockets (clients reconnect
+   * on their own, to this server's replacement), and wait for in-flight HTTP
+   * requests to finish. The caller then stops workers and closes Redis.
+   */
+  async function close(graceMs = 8000): Promise<void> {
+    draining = true;
+    clearInterval(hoursTimer);
+    for (const t of timers.values()) clearTimeout(t);
+    timers.clear();
+    await new Promise<void>((resolve) => {
+      io.close(() => resolve()); // also closes the HTTP server, which waits for open requests
+      // A connection that finishes its request stays open (keep-alive) and would
+      // hold the server open for keepAliveTimeout, so keep closing idle ones as
+      // requests finish; after the grace period, close whatever is left.
+      server.closeIdleConnections();
+      const sweep = setInterval(() => server.closeIdleConnections(), 50);
+      const deadline = setTimeout(() => server.closeAllConnections(), graceMs);
+      server.once('close', () => {
+        clearInterval(sweep);
+        clearTimeout(deadline);
+      });
+    });
+  }
+
+  return { app, server, io, broadcast, close };
 }

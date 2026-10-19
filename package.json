@@ -13,10 +13,17 @@
     "test": "npm test -w server",
     "typecheck": "npm run typecheck -w server && npm run typecheck -w web",
     "office": "npm run office -w server --",
-    "setup:alerts": "npm run setup:alerts -w server --"
+    "setup:alerts": "npm run setup:alerts -w server --",
+    "loadtest": "./scripts/loadtest.sh",
+    "lint": "eslint . --max-warnings 0"
   },
   "devDependencies": {
-    "concurrently": "^9.1.0"
+    "@eslint/js": "^10.0.1",
+    "concurrently": "^9.1.0",
+    "eslint": "^10.13.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "globals": "^17.13.0",
+    "typescript-eslint": "^8.71.2"
   },
   "overrides": {
     "vite": "^6.0.3"

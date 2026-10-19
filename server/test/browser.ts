@@ -86,7 +86,8 @@ export async function launch(): Promise<Browser> {
   return puppeteer.launch({
     headless: true,
     executablePath: process.env.CHROME_PATH || undefined,
-    args: ['--autoplay-policy=no-user-gesture-required', '--lang=en-US'],
+    // CI runners (Ubuntu 24.04) block Chrome's sandbox; it's safe to drop for our own test pages.
+    args: ['--autoplay-policy=no-user-gesture-required', '--lang=en-US', ...(process.env.CI ? ['--no-sandbox'] : [])],
   });
 }
 

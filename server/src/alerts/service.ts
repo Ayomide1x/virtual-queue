@@ -341,6 +341,17 @@ export class AlertService {
     this.scanTimers.clear();
   }
 
+  /**
+   * Stop, and wait (up to `timeoutMs`) for a send that's already under way. Jobs
+   * not started stay queued in Redis for the next server; a send cut off mid-way
+   * is retried when its lease runs out, so nothing is lost.
+   */
+  async shutdown(timeoutMs = 5000): Promise<void> {
+    this.stop();
+    const until = Date.now() + timeoutMs;
+    while (this.running && Date.now() < until) await new Promise((r) => setTimeout(r, 20));
+  }
+
   /** Run the worker soon (after a new job is queued), without waiting for the next poll. */
   kick(): void {
     if (this.timer) setImmediate(() => void this.tick());

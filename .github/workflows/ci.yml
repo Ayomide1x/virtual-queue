@@ -1,0 +1,89 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+# A newer push to the same branch cancels the run still going for the older one.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: Type-check, lint, test, build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      redis:
+        image: redis:7-alpine
+        ports: ['6379:6379']
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      # Tests use this Redis service (each test works under its own key prefix).
+      TEST_REDIS_URL: redis://127.0.0.1:6379
+      # Browser tests (axe, keyboard, language) use the Chrome that ships on the runner.
+      PUPPETEER_SKIP_DOWNLOAD: 'true'
+      CHROME_PATH: /usr/bin/google-chrome
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Type-check
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+  docker:
+    name: Docker image (amd64 + arm64)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      # arm64 too: the production server is an ARM (Ampere) machine.
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: false
+          build-args: APP_VERSION=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke test (the image starts and /health reports Redis)
+        run: |
+          docker buildx build --load --platform linux/amd64 -t virtual-queue:ci --build-arg APP_VERSION=${{ github.sha }} --cache-from type=gha .
+          docker network create vq
+          docker run -d --name redis --network vq redis:7-alpine
+          docker run -d --name app --network vq -p 3000:3000 -e REDIS_URL=redis://redis:6379 virtual-queue:ci
+          for _ in $(seq 30); do curl -sf http://127.0.0.1:3000/health && break; sleep 1; done
+          curl -sf http://127.0.0.1:3000/health | tee /dev/stderr | grep -q '"status":"ok"'
+          docker stop -t 15 app
+          docker logs app 2>&1 | tail -5
+          docker logs app 2>&1 | grep -q 'shutdown complete'

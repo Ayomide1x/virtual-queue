@@ -75,7 +75,6 @@ function DayScreen({ officeId, staffKey, onForbidden, officeName }: { officeId: 
     void load(date);
     const id = setInterval(() => void load(date), 30_000);
     return () => clearInterval(id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [date, load, live?.serverNow]);
 
   const act = async (entry: DayViewEntry, action: 'checkin' | 'cancel') => {

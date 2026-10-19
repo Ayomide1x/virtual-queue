@@ -1,0 +1,27 @@
+# One Caddy for every app on this server. Each site gets its own domain and an
+# automatic HTTPS certificate (Let's Encrypt). Caddy handles WebSockets on its
+# own, so the queue's live updates need no extra settings.
+#
+# Install as /etc/caddy/Caddyfile, then: sudo systemctl reload caddy
+# Check first with: caddy validate --config /etc/caddy/Caddyfile
+{
+	# Certificate expiry notices go here. Use an address you read.
+	email you@example.com
+}
+
+# Virtual Queue (this repo). The app listens only on 127.0.0.1:3210.
+queue.example.com {
+	encode zstd gzip
+	reverse_proxy 127.0.0.1:3210 {
+		# Caddy stops sending traffic while the app reports it's down or shutting down.
+		health_uri /health
+		health_interval 10s
+	}
+}
+
+# Market data pipeline (your other app). Point this at whatever port its
+# Compose file publishes on 127.0.0.1.
+market.example.com {
+	encode zstd gzip
+	reverse_proxy 127.0.0.1:8000
+}

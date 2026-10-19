@@ -7,18 +7,23 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { BrowserRouter } from 'react-router-dom';
 import App from './App';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { I18nProvider } from './i18n';
+import { installErrorReporting } from './lib/errorReporting';
 import { applyLargeText, savedLargeText } from './lib/textSize';
 
 // Before the first paint, so the page doesn't jump to the larger size.
 applyLargeText(savedLargeText());
+installErrorReporting();
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    <BrowserRouter>
-      <I18nProvider>
-        <App />
-      </I18nProvider>
-    </BrowserRouter>
+    <ErrorBoundary>
+      <BrowserRouter>
+        <I18nProvider>
+          <App />
+        </I18nProvider>
+      </BrowserRouter>
+    </ErrorBoundary>
   </React.StrictMode>,
 );

@@ -34,6 +34,13 @@ Plain `docker compose up --build` works too. Set `PUBLIC_URL` so QR codes and sh
 PUBLIC_URL=http://$(ipconfig getifaddr en0):3000 docker compose up --build   # macOS
 ```
 
+### Deploying to a server
+
+For a real deployment, see **[deploy/README.md](deploy/README.md)**. It covers an Oracle Cloud ARM Ubuntu instance shared with another Docker Compose app:
+- the app listens only on `127.0.0.1:3210`, and Redis stays unexposed
+- one shared Caddy serves both apps on their own domains with automatic HTTPS (example Caddyfile included)
+- `PUBLIC_URL`, `TRUST_PROXY`, and opening ports 80 and 443 in both the Oracle security list and the server firewall
+
 ## Offices and staff keys
 
 - Creating an office returns a random **office ID** and a secret **staff key**. Only a SHA-256 hash of the key is stored, so a lost key can't be recovered. Create a new office instead.
@@ -245,6 +252,88 @@ Open <http://localhost:5173> and create an office (or `npm run office -- create 
 
 For a production-style run without Docker: `npm run build && npm start` (serves everything on :3000).
 
+## Continuous integration
+
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on every push and pull request:
+
+1. **Checks:**
+   - `npm ci`, then `npm run typecheck`, `npm run lint` (ESLint with TypeScript and React-hooks rules, zero warnings allowed) and `npm test`
+   - the tests run against a Redis service container, including the browser tests in the runner's Chrome
+   - then `npm run build`
+2. **Docker:**
+   - builds the image for **linux/amd64 and linux/arm64** (the production server is ARM), with layer caching
+   - then smoke-tests it: starts it next to Redis, checks `/health` reports `ok`, and checks `docker stop` produces a clean `shutdown complete`
+
+Run the same checks locally with `npm run typecheck && npm run lint && npm test && npm run build`.
+
+## Monitoring
+
+- **Structured logs:**
+  - One JSON object per line in production (`time`, `level`, `msg`, `component`, …) and readable text in development. `LOG_FORMAT=json|pretty` and `LOG_LEVEL=debug|info|warn|error` override this.
+  - Every API request is logged with method, path, status, duration, office and a **request id**. The id is also returned as `X-Request-Id`, and included in 500 responses so a report can be matched to its log line.
+  - Secret ticket and appointment ids are replaced by `:id` and query strings are dropped. Email addresses are always masked, and staff keys are never logged.
+- **`/health`** (also at `/api/health`):
+  - `200 {"status":"ok","redis":{"ok":true,"latencyMs":1},"uptimeSec":…,"version":…}` when Redis answers within a second.
+  - `503` with `redis_unavailable`, or with `shutting_down` during a graceful shutdown.
+  - Docker's healthcheck uses it, and Caddy's `health_uri` can too.
+- **Error tracking**, off unless **`SENTRY_DSN`** is set (Sentry, or any compatible service such as GlitchTip):
+  - **What's reported:** unhandled request errors, failed broadcasts or subscriptions, uncaught exceptions and unhandled rejections.
+  - **Browser crashes** are reported by the web app to `POST /api/client-errors`. That endpoint is rate-limited, and logs and forwards them. Pages also show a "Reload" screen instead of going blank.
+  - **Privacy:** events carry no request bodies, headers, cookies, IP addresses or user data, and URLs are redacted.
+- **Graceful shutdown** on `SIGTERM` or `SIGINT` (`docker stop`, deploys, Ctrl+C):
+  1. `/health` switches to `shutting_down`.
+  2. New connections are refused, and in-flight requests finish. Kept-alive connections are closed as they go idle.
+  3. Sockets are disconnected (clients reconnect to the new instance), and alert sends under way are allowed to finish.
+  4. Redis is closed, queued error reports are flushed, and the process exits 0.
+  - Anything still running after `SHUTDOWN_TIMEOUT_MS` (10 s) is cut off. Compose allows 20 s.
+
+## Load testing
+
+```bash
+./scripts/loadtest.sh                                  # 25 offices, 500 residents, 3 min at peak
+RESIDENTS=2000 OFFICES=100 HOLD=2m ./scripts/loadtest.sh
+BASE_URL=https://queue.example.com ./scripts/loadtest.sh   # an existing server (needs relaxed RATE_LIMIT_* there)
+```
+
+[`loadtest/queue.js`](loadtest/queue.js) is a [k6](https://k6.io) script. The runner starts a throwaway Redis and the production build of the server, with rate limits lifted because every simulated phone shares one IP.
+
+**What it simulates:**
+- **Residents** join (30% in Spanish), keep a live connection open on their ticket, and sometimes refresh the page.
+  - About 10% also watch the lobby feed.
+  - When called, they head to the counter. Otherwise they give up after 1–2 minutes and leave the line.
+  - They speak Socket.IO's wire protocol over a raw WebSocket, so each one behaves like a real phone: connect, subscribe, answer heartbeats.
+- **Staff** at 3 counters per office call the next ticket, serve for 3–8 s, and mark them served (6% no-shows).
+- A **lobby TV and a staff console** per office receive every update.
+
+**Measures:**
+- API latency per action
+- WebSocket connect time
+- **call → phone**: from staff pressing *Call Next* to the resident's phone receiving "called". It's measured against the server's `calledAt`, on the same clock.
+- update rates, errors, and the server's CPU and memory
+
+**Results** (Apple M5, 10 cores. Node 24 production build, Redis 7, and k6 2.3 all on the same machine, so k6's CPU use is included):
+
+| | 500 residents · 25 offices · 75 staff · 50 screens | 2,000 residents · 100 offices · 300 staff · 200 screens |
+| --- | --- | --- |
+| Requests | 13,566 (49/s) | 41,839 (195/s) |
+| API latency p95 / p99 | **3.9 ms** / 7.7 ms | **4.7 ms** / 11.4 ms |
+| Join · Call Next · Served (p95) | 4.7 · 4.0 · 3.7 ms | 4.8 · 5.3 · 4.6 ms |
+| Call → phone p50 / p95 / max | 30 / **33** / 71 ms | 28 / **33** / 76 ms |
+| WebSocket connect p95 | 4 ms | 4 ms |
+| Errors | **0** of 13,566 | **0** of 41,839 |
+| Server CPU (peak, % of one core) · memory | 42% · 294 MB | 71% · 427 MB |
+
+About 25 ms of "call → phone" is deliberate: changes are batched for 25 ms, so a burst of changes becomes one broadcast per office.
+
+**Bottlenecks found and fixed:**
+
+| Problem | Effect | Fix |
+| --- | --- | --- |
+| Node closes idle keep-alive connections after 5 s. Staff pause about 5 s between actions, so a request sometimes went out just as the server closed its connection | **One "connection reset" per run.** Behind a proxy this shows up as occasional 502s | `keepAliveTimeout` raised to 125 s, longer than Caddy's 2-minute upstream keep-alive, and graceful shutdown now closes kept-alive connections as they go idle |
+| Every change in an office re-sent a ticket update to every phone in it, even when that phone's view was identical | 551 updates/s at 500 residents, and 2,074/s at 2,000 | Each ticket room remembers what it was last sent, and identical views are skipped: **133/s (−76%)** and **485/s (−77%)**. Data sent to clients fell from 211 to 133 MB and from 597 to 409 MB |
+
+Each fix has a test: an update is sent only when the view changes, the keep-alive outlasts the proxy, and shutdown stays prompt with kept-alive connections. The test setup above was also run through Caddy over HTTPS (see [deploy/README.md](deploy/README.md#checked-before-writing-this)).
+
 ## Tests
 
 ```bash
@@ -258,7 +347,18 @@ docker run --rm -d -p 6399:6379 redis:7-alpine
 TEST_REDIS_URL=redis://127.0.0.1:6399 npm test
 ```
 
-**242 tests in thirteen files**, including:
+**256 tests in fourteen files**, including:
+
+- `monitoring.test.ts`:
+  - JSON log lines, levels, error serialization and path redaction
+  - per-request logs with request ids, and 5xx logged and tracked without leaking details to the client
+  - `/health` returning 200 normally and 503 when Redis is down
+  - error tracking: off without a DSN, and with one, events sent to a local fake Sentry with secret ids and personal data stripped
+  - browser error reports: logged, tracked, rate-limited and redacted
+  - graceful shutdown: in-flight requests finish, new connections are refused and sockets are disconnected
+  - the real server process exiting 0 on `SIGTERM` with its shutdown logs
+- `api.test.ts`, under load: phones get an update only when their view changes, and the keep-alive timeout outlasts a reverse proxy's.
+- A browser test: a crash in the page is reported to the server without the ticket id from the URL.
 
 - `analytics.test.ts`:
   - **The calculations, on hand-built events with known answers:**
@@ -431,6 +531,13 @@ All keys expire after `OFFICE_TTL_DAYS` of inactivity. Finished tickets (12 h), 
 | `PUBLIC_URL` | `http://$HOST_IP:$PORT` if `HOST_IP` is set | Base URL for QR codes and share links. `up.sh` sets it to your LAN address |
 | `HOST_IP` | auto-detected (not in Docker) | LAN IP, used when `PUBLIC_URL` isn't set |
 | `OFFICE_TTL_DAYS` | `30` | Inactivity expiry for offices |
+| `BIND_IP` | `0.0.0.0` | Compose only: host address the app's port is published on. Use `127.0.0.1` behind a reverse proxy |
+| `NODE_ENV` / `APP_ENV` | `production` in Docker | `APP_ENV` (or `NODE_ENV`) is the environment name in logs and error reports |
+| `LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error` |
+| `LOG_FORMAT` | `json` in production, else `pretty` | |
+| `SENTRY_DSN` | unset | Turns on error tracking (Sentry or a compatible service) |
+| `APP_VERSION` | `package.json` version | Shown by `/health` and attached to error reports. CI and deploys pass the git SHA |
+| `SHUTDOWN_TIMEOUT_MS` | `10000` | Graceful shutdown time limit |
 | `ANALYTICS_RETENTION_DAYS` | `90` | Days of ticket history (analytics) an active office keeps |
 | `RATE_LIMIT_CREATE_OFFICE` | `10/3600` | Office creations per IP per window (requests/seconds) |
 | `RATE_LIMIT_JOIN` | `30/60` | Joins per IP per window |
@@ -460,9 +567,14 @@ server/src/
   cli.ts          create/seed offices from the terminal
   alerts/         service.ts (opt-in, scan, job queue & worker) · senders.ts (web push, Resend, log)
   setupAlerts.ts  generates VAPID keys into .env
+  logger.ts       structured JSON logs, path redaction
+  errors.ts       optional error tracking (Sentry), event scrubbing
 web/public/       sw.js (push + notification clicks) · icons/
   network.ts      LAN IP detection
-server/test/      vitest suite (real Redis)
+server/test/      vitest suite (real Redis, plus browser tests in Chrome)
+loadtest/         k6 load test (queue.js); results/ is local output
+deploy/           deploy guide for a shared server, example Caddyfile and production .env
+.github/workflows/ci.yml  type-check, lint, test, build, and multi-arch Docker image on every push and PR
 web/src/pages/    Home · Resident · Book · Appointment · Staff · StaffAppointments · Analytics · Display · Settings
 web/src/components/Charts.tsx  small accessible SVG charts (each with a data table)
 web/src/i18n/     en.ts (source text) · es.ts · index.tsx (language registry, provider, date/time formatting)

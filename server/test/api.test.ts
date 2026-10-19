@@ -372,3 +372,38 @@ describe('rate limits', () => {
     }
   });
 });
+
+describe('efficiency under load', () => {
+  it('phones only get a ticket update when their view actually changed', async () => {
+    const o = await createOffice();
+    const first = (await api('POST', `/o/${o.officeId}/tickets`, { name: 'Ann', service: 'license' })).body.ticket;
+    const me = (await api('POST', `/o/${o.officeId}/tickets`, { name: 'Me', service: 'license' })).body.ticket;
+    const phone = socket(srv.base);
+    phone.s.emit('subscribe', { officeId: o.officeId, role: 'ticket', ticketId: me.id });
+    await phone.waitFor((e) => e.event === 'ticket:update');
+    await sleep(150); // let any broadcast already scheduled go out
+    const count = () => phone.events.filter((e) => e.event === 'ticket:update').length;
+    const before = count();
+
+    // People joining behind me don't change my place, so my phone stays quiet.
+    for (const n of ['B', 'C', 'D']) await api('POST', `/o/${o.officeId}/tickets`, { name: n, service: 'license' });
+    await sleep(300);
+    expect(count()).toBe(before);
+
+    // The person ahead of me leaves: now I'm next, and my phone hears it.
+    await api('DELETE', `/o/${o.officeId}/tickets/${first.id}`);
+    const update = await phone.waitFor((e) => e.event === 'ticket:update' && e.data.view?.ahead === 0);
+    expect(update.data.view.position).toBe(1);
+    expect(count()).toBe(before + 1);
+  });
+
+  it('keeps idle connections open longer than a reverse proxy does (no reset/502 races)', async () => {
+    const redis = connect();
+    const subscriber = connect();
+    const handle = createApp({ redis, subscriber, offices: new OfficeStore(redis, { root: uniqueRoot() }), publicUrl: null, lanIp: null });
+    expect(handle.server.keepAliveTimeout).toBeGreaterThan(120_000); // Caddy reuses upstream connections for up to 2 min
+    expect(handle.server.headersTimeout).toBeGreaterThan(handle.server.keepAliveTimeout);
+    await handle.close();
+    await sleep(50); // let the pattern subscription settle before the connections close
+  });
+});

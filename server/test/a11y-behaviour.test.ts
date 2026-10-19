@@ -356,3 +356,18 @@ describe('analytics dashboard', () => {
     await page.browserContext().close();
   });
 });
+
+describe('error reporting', () => {
+  it('a crash in the page is reported to the server, without the ticket id from the URL', async () => {
+    const { officeId } = await newOffice();
+    const me = (await app.api('POST', `/o/${officeId}/tickets`, { name: 'Me', service: 'license' })).body.ticket;
+    const page = await joinPage(officeId, me.id);
+    const report = page.waitForRequest((r) => r.url().endsWith('/api/client-errors') && r.method() === 'POST');
+    // Thrown from a script in the page itself (like the app's own code), not from the test harness.
+    await page.addScriptTag({ content: "setTimeout(() => { throw new Error('test crash'); }, 0);" });
+    const body = JSON.parse((await report).postData() ?? '{}');
+    expect(body).toMatchObject({ kind: 'error', message: expect.stringContaining('test crash'), url: `/o/${officeId}/join` });
+    expect(JSON.stringify(body)).not.toContain(me.id);
+    await page.browserContext().close();
+  });
+});

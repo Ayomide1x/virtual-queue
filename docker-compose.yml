@@ -1,3 +1,7 @@
+# A fixed project name keeps this app's containers, network and volume separate
+# from any other Compose app on the same machine.
+name: virtual-queue
+
 services:
   redis:
     image: redis:7-alpine
@@ -11,11 +15,17 @@ services:
       timeout: 3s
       retries: 10
     restart: unless-stopped
+    # No ports: Redis is reachable only by the app, on Compose's private network.
 
   app:
-    build: .
+    build:
+      context: .
+      args:
+        APP_VERSION: ${APP_VERSION:-}
     ports:
-      - "${PORT:-3000}:3000"
+      # LAN demo: all interfaces, so phones on the Wi-Fi can connect.
+      # On a server behind a reverse proxy, set BIND_IP=127.0.0.1 (see deploy/README.md).
+      - "${BIND_IP:-0.0.0.0}:${PORT:-3000}:3000"
     environment:
       REDIS_URL: redis://redis:6379
       PORT: "3000"
@@ -43,10 +53,22 @@ services:
       EMAIL_FROM: ${EMAIL_FROM:-Virtual Queue <onboarding@resend.dev>}
       RATE_LIMIT_NOTIFY: ${RATE_LIMIT_NOTIFY:-20/600}
       TZ: ${TZ:-UTC}
+      NODE_ENV: ${NODE_ENV:-production}
+      # Monitoring: JSON logs by default in production; error tracking only if SENTRY_DSN is set.
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      LOG_FORMAT: ${LOG_FORMAT:-}
+      SENTRY_DSN: ${SENTRY_DSN:-}
+      APP_ENV: ${APP_ENV:-}
     depends_on:
       redis:
         condition: service_healthy
     restart: unless-stopped
+    # Time for a graceful shutdown (in-flight requests, alert sends) on deploys.
+    stop_grace_period: 20s
+    # Keep container logs from filling the disk.
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "5" }
 
 volumes:
   redis-data:

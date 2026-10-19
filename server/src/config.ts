@@ -23,7 +23,25 @@ function parseTrustProxy(v: string | undefined): boolean | number | string | und
   return /^\d+$/.test(v) ? Number(v) : v;
 }
 
+const pkgVersion = (() => {
+  try {
+    return (JSON.parse(fs.readFileSync(path.resolve(__dirname, '../package.json'), 'utf8')) as { version?: string }).version ?? null;
+  } catch {
+    return null;
+  }
+})();
+
 export const config = {
+  /** Shown by /health and attached to error reports. Set APP_VERSION (e.g. a git SHA) in CI or deploys. */
+  version: process.env.APP_VERSION || pkgVersion,
+  environment: process.env.APP_ENV || process.env.NODE_ENV || 'development',
+  logLevel: process.env.LOG_LEVEL,
+  /** "json" (default in production) or "pretty". */
+  logFormat: process.env.LOG_FORMAT,
+  /** Error tracking: Sentry (or GlitchTip, etc.) is used only when this is set. */
+  sentryDsn: process.env.SENTRY_DSN || undefined,
+  /** How long a graceful shutdown may take before the process exits anyway. */
+  shutdownTimeoutMs: Number(process.env.SHUTDOWN_TIMEOUT_MS ?? 10_000),
   port: Number(process.env.PORT ?? 3000),
   /** Port as seen from outside (differs from `port` when Docker maps it). */
   publicPort,

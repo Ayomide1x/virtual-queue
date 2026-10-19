@@ -7,7 +7,6 @@ import type { Ticket } from '../src/types';
 import { closeAll, connect, deleteUnder } from './helpers';
 
 const redis = connect();
-const MIN = 60_000;
 const at = (hhmm: string) => new Date(`2026-03-04T${hhmm}:00Z`).getTime(); // a Wednesday, UTC office
 
 const config: OfficeConfig = {

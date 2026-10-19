@@ -3,3 +3,6 @@
 .git
 .env
 *.log
+loadtest
+.github
+deploy
