@@ -30,6 +30,7 @@ export default function App() {
         <Route path="/" element={staff(<Home />)} />
         <Route path="/o/:officeId" element={<OfficeRoot />} />
         <Route path="/o/:officeId/join" element={resident(<Resident />)} />
+        <Route path="/o/:officeId/t/:ticketId" element={resident(<Resident />)} />
         <Route path="/o/:officeId/staff" element={staff(<Staff />)} />
         <Route path="/o/:officeId/display" element={resident(<Display />)} />
         <Route path="/o/:officeId/settings" element={staff(<Settings />)} />

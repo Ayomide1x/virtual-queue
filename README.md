@@ -136,7 +136,22 @@ Things learned testing on real phones:
 - **Resend's test sender (`onboarding@resend.dev`) only delivers to the email on your Resend account.** Other recipients are rejected (permanent error, not retried). To email residents, verify a domain in Resend and set `EMAIL_FROM` to an address on it.
 - **A "sending access" Resend key can't read delivery status**, so check your inbox (and spam) to confirm a test email arrived.
 
-**iPhone/iPad** (iOS 16.4+) only allow web push for sites added to the Home Screen. The join page is an installable PWA, with a per-office manifest, a service worker and icons. iPhone users who haven't installed it see a 3-step visual guide: Share → Add to Home Screen → open the app and tap Notify me. iOS gives home-screen apps their own storage, so the saved URL must carry the resident's ticket. **iOS reads the manifest once, when the page loads (before the resident joins), and doesn't re-read it when the page updates it.** So the join page keeps `?ticket=…` in the address bar, and the manifest leaves out `start_url` until there's a ticket, which makes iOS save the address bar URL. The installed app then opens straight to the resident's place in line. A ticket already stored in the app wins over the one in its start URL, since that URL never changes.
+**iPhone/iPad** (iOS 16.4+) only allow web push for sites added to the Home Screen. The join page is an installable PWA, with a per-office manifest, a service worker and icons. iPhone users who haven't installed it see a 3-step visual guide on their ticket page: Share → Add to Home Screen → open the app and tap Notify me.
+
+**How a ticket survives the move to the Home Screen.** iOS gives a Home Screen app its own storage, separate from Safari, and opens it at the manifest's `start_url`. Safari reads the manifest once, when a page loads, and ignores later changes to it. So:
+
+- Every ticket has its own address, `/o/<office>/t/<ticket id>`. Old `/o/<office>/join?ticket=…` links (alerts already sent, icons already installed) redirect to it.
+- Joining (or checking in for an appointment) loads the ticket address as a fresh page, rather than changing the route inside the app.
+- The server writes the manifest link into the HTML of resident pages. On a ticket address, `start_url` is that address, before any JavaScript runs. Whichever URL iOS saves, the page's or the manifest's, it carries the ticket.
+- **Which ticket wins depends on where the page runs.**
+  - **In Safari** (any browser tab), the ticket in the address comes first, then the one stored on the device. The resident opened that link, so that's the ticket they mean.
+  - **In a Home Screen app**, storage comes first, then the address. An installed icon's `start_url` is frozen at the ticket it was installed with, and iOS never updates it when the resident joins again inside the app, so only the app's storage knows about a newer ticket.
+  - **If the first ticket has already ended** (expired, left or finished), the page falls back to the other one. A ticket that ends while it's on screen is shown as ended; it isn't swapped for another.
+  - **How the page tells them apart:** `isStandalone()` in `web/src/lib/pwa.ts` checks `navigator.standalone` (iOS) and the `display-mode: standalone` media query. It's the same check that chooses between the install guide and the **Notify me** button, and on an iPhone it's false in Safari and true in the installed app.
+- **An app added before joining** has its own, empty storage, so it can't see a ticket joined later in Safari. On iPhone, the app's join page says so: open the ticket in Safari and add it to the Home Screen from that page. The install guide only appears on the ticket page, which makes this rare.
+- **Copy ticket link** on the ticket page copies the ticket address, to keep or open on another device. If the clipboard isn't available, the link is shown to copy by hand.
+
+**Ticket links are capability URLs.** Ticket ids are random UUIDs (`crypto.randomUUID()`, 122 random bits), so they can't be guessed or enumerated. The short ticket number on the lobby screen (e.g. A-042) is separate and grants nothing. Anyone who *has* the link can see the resident's name, place and service, leave the line for them, and turn their alerts on or off (they see only a masked email). The id was already in the address bar and in alert links. Giving it its own address makes the link more likely to be bookmarked or shared, but it doesn't expose anything new. The link stops working when the ticket ends. Every response carries `Referrer-Policy: no-referrer`, so ticket addresses are never sent to other sites. Our logs and error reports (including what the browser sends) replace ids with `:id`. Caddy doesn't log requests unless you add a `log` block, but a proxy or tunnel in between (e.g. Cloudflare) can see full URLs.
 
 ### How it works
 
@@ -347,8 +362,16 @@ docker run --rm -d -p 6399:6379 redis:7-alpine
 TEST_REDIS_URL=redis://127.0.0.1:6399 npm test
 ```
 
-**256 tests in fourteen files**, including:
+**274 tests in fifteen files**, including:
 
+- `ticket-link.test.ts`:
+  - ticket pages served with a manifest whose `start_url` is the ticket address; the join page's opens the join page; none on staff pages or malformed addresses; `start_url` can't point at another office or site
+  - old `?ticket=` links redirect to the ticket address
+  - in a browser: joining reloads onto the ticket address, which opens the ticket in a context with empty storage; an ended ticket lands on the join form with one page load, no loop
+  - which ticket wins in Safari and in a Home Screen app (emulated with `navigator.standalone` and the display-mode query), and the fallback when one has ended
+  - the "added before joining" message only in the Home Screen app; Copy ticket link, with and without a clipboard; axe on both new states
+  - `Referrer-Policy: no-referrer` on pages, the API and static files
+  - (a stand-in for Safari vs. the Home Screen app; only a real iPhone confirms what iOS does)
 - `monitoring.test.ts`:
   - JSON log lines, levels, error serialization and path redaction
   - per-request logs with request ids, and 5xx logged and tracked without leaking details to the client

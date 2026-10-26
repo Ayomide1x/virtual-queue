@@ -201,7 +201,7 @@ describe('when alerts are sent', () => {
     await queue().recall(3);
     await settle();
     await settle();
-    expect(push.sent.map((s) => s.message)).toEqual([{ title: `It’s your turn: ${me.number}`, body: 'Please go to Counter 3 now.', url: expect.stringContaining(`/o/${officeId}/join?ticket=${me.id}`), tag: expect.any(String), lang: 'en', urgent: true }]);
+    expect(push.sent.map((s) => s.message)).toEqual([{ title: `It’s your turn: ${me.number}`, body: 'Please go to Counter 3 now.', url: expect.stringContaining(`/o/${officeId}/t/${me.id}`), tag: expect.any(String), lang: 'en', urgent: true }]);
     expect(email.sent.map((e) => e.message.body)).toEqual(['Please go to Counter 3 now.']);
   });
 
@@ -484,12 +484,12 @@ describe('end to end through the API', () => {
       body: JSON.stringify({ email: EMAIL }),
     });
     expect(cross.status).toBe(404);
-    const manifest = await (await fetch(`${base}/o/${created.officeId}/manifest.webmanifest?start=/o/${created.officeId}/join?ticket=${join.ticket.id}`)).json() as any;
-    expect(manifest).toMatchObject({ start_url: `/o/${created.officeId}/join?ticket=${join.ticket.id}`, display: 'standalone' });
+    const manifest = await (await fetch(`${base}/o/${created.officeId}/manifest.webmanifest?start=/o/${created.officeId}/t/${join.ticket.id}`)).json() as any;
+    expect(manifest).toMatchObject({ start_url: `/o/${created.officeId}/t/${join.ticket.id}`, display: 'standalone' });
     const bad = await (await fetch(`${base}/o/${created.officeId}/manifest.webmanifest?start=https://evil.example.com`)).json() as any;
-    expect(bad.start_url).toBeUndefined(); // defaults to the page URL
+    expect(bad.start_url).toBe(`/o/${created.officeId}/join`);
     const plain = await (await fetch(`${base}/o/${created.officeId}/manifest.webmanifest`)).json() as any;
-    expect(plain).not.toHaveProperty('start_url');
+    expect(plain.start_url).toBe(`/o/${created.officeId}/join`);
     app.io.close();
   });
 });

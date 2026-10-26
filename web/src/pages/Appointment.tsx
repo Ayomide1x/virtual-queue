@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Link, useParams } from 'react-router-dom';
 import { AlertsOptIn } from '../components/AlertsOptIn';
 import { CopyField } from '../components/CopyField';
 import { Header } from '../components/Header';
@@ -25,7 +25,6 @@ function AppointmentScreen({ officeId, apptId, office }: { officeId: string; app
   useTitle(t.appointment.pageTitle(office.name));
   useOfficeManifest(officeId, `/o/${officeId}/appointment/${apptId}`);
   const api = officeApi(officeId);
-  const navigate = useNavigate();
   const now = useNow(1000);
   const [view, setView] = useState<AppointmentView | null>(null);
   const [notFound, setNotFound] = useState(false);
@@ -71,7 +70,7 @@ function AppointmentScreen({ officeId, apptId, office }: { officeId: string; app
     } catch {
       /* ignore */
     }
-    navigate(`/o/${officeId}/join`);
+    window.location.assign(`/o/${officeId}/t/${ticketId}`); // a full load: see Resident's onJoined
   };
 
   const checkIn = async () => {

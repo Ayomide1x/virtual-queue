@@ -1,6 +1,6 @@
 // Send browser crashes to the server (POST /api/client-errors), where they're
-// logged and, if error tracking is on, forwarded. The server strips ticket ids
-// from URLs; we never send form contents or storage.
+// logged and, if error tracking is on, forwarded. Ticket ids are blanked out
+// here (and again on the server); we never send form contents or storage.
 
 const MAX_REPORTS = 5; // per page load, so a render loop can't flood the server
 let sent = 0;
@@ -16,7 +16,8 @@ export function reportError(kind: 'error' | 'unhandledrejection' | 'react', err:
     kind,
     message: e.message.slice(0, 1000),
     stack: e.stack?.slice(0, 4000),
-    url: location.pathname, // no query string or hash: those can hold ticket ids and staff keys
+    // No query string or hash (they can hold staff keys), and no ids: a ticket's address holds its secret id.
+    url: location.pathname.replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, ':id'),
   });
   try {
     void fetch('/api/client-errors', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body, keepalive: true }).catch(() => {});

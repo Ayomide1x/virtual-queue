@@ -469,7 +469,7 @@ export class AlertService {
       const t = view.ticket;
       const lang = t.lang;
       const tx = ALERT_TEXTS[lang];
-      const url = `${base}/join?ticket=${job.targetId}`;
+      const url = `${base}/t/${job.targetId}`;
       if (job.type === 'near') {
         if (t.status !== 'waiting') return null;
         return { title: tx.nearTitle(t.number), body: tx.nearBody(view.ahead ?? 0, config.name), url, tag, lang };

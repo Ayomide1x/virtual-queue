@@ -69,6 +69,8 @@ export const es: Messages = {
     noLongerActive: 'Su número anterior ya no está activo. Puede volver a unirse a la fila abajo.',
     left: 'Usted salió de la fila.',
     findingTicket: 'Buscando su número…',
+    appNoTicketTitle: '¿Ya se unió a la fila en Safari?',
+    appNoTicketBody: 'Esta app de la pantalla de inicio guarda sus números aparte de Safari. Si se unió en Safari, abra su número allí y agréguelo a la pantalla de inicio desde esa página.',
   },
 
   ticket: {
@@ -91,6 +93,10 @@ export const es: Messages = {
     keepOpenStrong: 'Mantenga esta página abierta',
     keepOpenRest: ' (o active las alertas arriba). Su teléfono sonará cuando sea su turno. Puede actualizar la página sin problema: su número está guardado en este dispositivo.',
     soundOn: 'Activar alertas con sonido',
+    copyLink: 'Copiar enlace del número',
+    linkCopied: 'Enlace copiado.',
+    copyFailed: 'No se pudo copiar. Este es el enlace de su número:',
+    linkHint: 'Cualquier persona con este enlace puede ver su lugar y sacarlo de la fila.',
     leave: 'Salir de la fila',
     leaveQuestion: '¿Salir de la fila?',
     leaveBody: 'Perderá su lugar y necesitará un número nuevo para volver.',

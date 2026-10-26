@@ -60,6 +60,7 @@ describe('structured logs', () => {
   it('redacts secret ids and query strings from paths', () => {
     expect(redactPath(`/api/o/abc123/tickets/${TICKET}/notify?channel=email`)).toBe('/api/o/abc123/tickets/:id/notify');
     expect(redactPath(`/o/abc123/join?ticket=${TICKET}`)).toBe('/o/abc123/join');
+    expect(redactPath(`/o/abc123/t/${TICKET}`)).toBe('/o/abc123/t/:id');
     expect(redactPath(`/o/abc123/appointment/${TICKET.toUpperCase()}`)).toBe('/o/abc123/appointment/:id');
   });
 

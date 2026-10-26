@@ -4,12 +4,12 @@ import { ConnectionBanner } from '../components/ConnectionStatus';
 import { Header } from '../components/Header';
 import { OfficeGate } from '../components/OfficeGate';
 import { ServiceBadge } from '../components/ServiceBadge';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import { errorText, formatRange, formatTime, hoursText, useI18n } from '../i18n';
 import { ApiError, officeApi } from '../lib/api';
 import { useChannel } from '../lib/socket';
 import { audioUnlocked, playChime, unlockAudio, vibrate } from '../lib/sound';
-import { useOfficeManifest } from '../lib/pwa';
+import { isIOS, isStandalone, useOfficeManifest } from '../lib/pwa';
 import { useOfficeId } from '../lib/useOffice';
 import { useTitle } from '../lib/useTitle';
 import type { LobbyState, OfficeInfo, TicketView } from '../types';
@@ -44,68 +44,129 @@ function ticketStorage(officeId: string) {
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
+/** A ticket's own address. Bookmarkable, and what the Home Screen app opens on. */
+export const ticketPath = (officeId: string, ticketId: string) => `/o/${officeId}/t/${ticketId}`;
+
 /**
- * Pick up a ticket passed in the URL (?ticket=…), e.g. when the installed home
- * screen app opens for the first time — iOS gives it separate storage. A ticket
- * already on this device wins: the app's start URL keeps its first ticket forever.
+ * The tickets this page could show, best first.
+ *
+ * - In Safari (or any browser tab), the ticket in the address comes first: the
+ *   resident opened that link, so that's the ticket they mean.
+ * - In a Home Screen app, the one in storage comes first. The icon's start_url
+ *   is frozen at the ticket it was installed with, and iOS never updates it, so
+ *   when the resident joins again from inside the app, only the app's storage
+ *   knows about the newer ticket.
+ *
+ * The other one is the fallback, used if the first has already ended.
  */
-function adoptTicketFromUrl(officeId: string) {
-  const id = new URLSearchParams(window.location.search).get('ticket');
-  const storage = ticketStorage(officeId);
-  if (id && UUID.test(id) && !storage.get()) storage.set(id);
+function ticketCandidates(officeId: string, fromUrl: string | null, standalone: boolean): string[] {
+  const stored = ticketStorage(officeId).get();
+  const order = standalone ? [stored, fromUrl] : [fromUrl, stored];
+  return order.filter((id, i): id is string => !!id && UUID.test(id) && order.indexOf(id) === i);
 }
 
 export default function Resident() {
   const officeId = useOfficeId();
-  useState(() => adoptTicketFromUrl(officeId));
+  const params = useParams();
+  // Decided once, on load: later route changes (a ticket ending → the join page) must not bounce back.
+  const [start] = useState(() => {
+    // Installed Home Screen app (iOS: navigator.standalone) vs. a browser tab.
+    const standalone = isStandalone();
+    const fromUrl = params.ticketId ?? new URLSearchParams(window.location.search).get('ticket');
+    const candidates = ticketCandidates(officeId, fromUrl, standalone);
+    const target = candidates[0] ? ticketPath(officeId, candidates[0]) : `/o/${officeId}/join`;
+    const here = window.location.pathname === target && !window.location.search.includes('ticket=');
+    // In a browser, a full page load, not an in-app route change: Safari reads
+    // the page's manifest (start_url = this address) only when a page loads.
+    // An installed app's start_url is already fixed, so there it's in-app.
+    return { standalone, candidates, target, reload: !here && !standalone, move: !here && standalone };
+  });
+  useEffect(() => {
+    if (start.reload) window.location.replace(start.target);
+  }, [start]);
+  if (start.reload) return null;
   return (
     <OfficeGate officeId={officeId}>
-      {(data) => <ResidentScreen key={officeId} officeId={officeId} initialOffice={data.office} />}
+      {(data) => (
+        <ResidentScreen key={officeId} officeId={officeId} initialOffice={data.office} candidates={start.candidates} standalone={start.standalone} moveTo={start.move ? start.target : null} />
+      )}
     </OfficeGate>
   );
 }
 
-function ResidentScreen({ officeId, initialOffice }: { officeId: string; initialOffice: OfficeInfo }) {
+function ResidentScreen({
+  officeId,
+  initialOffice,
+  candidates: initialCandidates,
+  standalone,
+  moveTo,
+}: {
+  officeId: string;
+  initialOffice: OfficeInfo;
+  candidates: string[];
+  standalone: boolean;
+  moveTo: string | null;
+}) {
   const storage = ticketStorage(officeId);
   const api = officeApi(officeId);
   const { data: lobby } = useChannel<LobbyState>({ officeId, role: 'lobby' }, 'lobby:state');
   const office = lobby?.office ?? initialOffice;
   const { t, lang } = useI18n();
   useTitle(t.join.pageTitle(office.name));
-  const [ticketId, setTicketId] = useState<string | null>(storage.get);
-  // "Add to Home Screen" opens this office, with this ticket.
-  useOfficeManifest(officeId, ticketId ? `/o/${officeId}/join?ticket=${ticketId}` : undefined);
-  // Keep the ticket in the address bar too: iOS saves this URL on "Add to Home Screen".
-  useEffect(() => {
-    const url = new URL(window.location.href);
-    if (ticketId) url.searchParams.set('ticket', ticketId);
-    else url.searchParams.delete('ticket');
-    window.history.replaceState(window.history.state, '', url.pathname + url.search + url.hash);
-  }, [ticketId]);
-  const [joinedView, setJoinedView] = useState<TicketView | null>(null);
+  const navigate = useNavigate();
+  const [candidates, setCandidates] = useState(initialCandidates);
+  const ticketId = candidates[0] ?? null;
+  // "Add to Home Screen" opens this office, with this ticket. (In production the
+  // server already put this link in the page; this keeps dev and later changes in step.)
+  useOfficeManifest(officeId, ticketId ? ticketPath(officeId, ticketId) : `/o/${officeId}/join`);
   const [notice, setNotice] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (moveTo) navigate(moveTo, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const { data: live } = useChannel<{ officeId: string; id: string; view: TicketView | null; serverNow?: number }>(
     ticketId ? { officeId, role: 'ticket', ticketId } : null,
     'ticket:update',
     (d) => d.id === ticketId,
   );
-  const view = live ? live.view : joinedView;
+  const current = live && live.id === ticketId ? live : null; // not a previous ticket's last update
+  const view = current ? current.view : null;
 
   const forget = (message: string | null) => {
-    storage.clear();
-    setTicketId(null);
-    setJoinedView(null);
+    if (storage.get() === ticketId) storage.clear();
+    setCandidates([]);
     setNotice(message);
+    navigate(`/o/${officeId}/join`, { replace: true });
   };
 
-  // Ticket expired, was reset, or the resident left from another tab.
+  // The first time we hear about a ticket: if it had already ended and there's
+  // another one to try, try that. Once it's been seen in line, endings are shown.
+  const seenActive = useRef<string | null>(null);
   useEffect(() => {
-    if (!ticketId || !live) return;
-    if (live.view === null) forget(t.join.noLongerActive);
-    else if (live.view.ticket.status === 'left') forget(t.join.left);
+    if (!ticketId || !current) return;
+    const status = current.view?.ticket.status;
+    const isActive = status === 'waiting' || status === 'called';
+    if (isActive) {
+      seenActive.current = ticketId;
+      if (storage.get() !== ticketId) storage.set(ticketId); // this device now follows this ticket
+      return;
+    }
+    if (seenActive.current !== ticketId && candidates.length > 1) {
+      if (storage.get() === ticketId) storage.clear();
+      const next = candidates[1];
+      // Browser: a full load, so the page (and its manifest) carries the ticket shown.
+      if (!standalone) return window.location.replace(ticketPath(officeId, next));
+      setCandidates(candidates.slice(1));
+      navigate(ticketPath(officeId, next), { replace: true });
+      return;
+    }
+    // Ticket expired, was reset, or the resident left from another tab.
+    if (current.view === null) forget(t.join.noLongerActive);
+    else if (status === 'left') forget(t.join.left);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [live, ticketId]);
+  }, [current, ticketId]);
 
   // Alerts and the lobby announcement use the ticket's language: keep it in step with the page.
   const syncedLang = useRef<string | null>(null);
@@ -127,9 +188,9 @@ function ResidentScreen({ officeId, initialOffice }: { officeId: string; initial
 
   const onJoined = (v: TicketView) => {
     storage.set(v.ticket.id);
-    setNotice(null);
-    setJoinedView(v);
-    setTicketId(v.ticket.id);
+    // Load the ticket's own address as a fresh page, so the page Safari adds to
+    // the Home Screen (and its manifest) already carries the ticket.
+    window.location.replace(ticketPath(officeId, v.ticket.id));
   };
 
   const status = ticketId && view ? view.ticket.status : null;
@@ -247,6 +308,14 @@ function JoinForm({
       {notice && (
         <div role="status" className="rounded-md border-l-8 border-primary bg-primary-lighter p-4 text-ink">
           {notice}
+        </div>
+      )}
+
+      {/* Added to the Home Screen before joining, then joined in Safari: that ticket is in Safari's storage, not here. */}
+      {isIOS() && isStandalone() && (
+        <div className="rounded-md border-l-8 border-muted-light bg-white p-4 text-ink">
+          <p className="font-bold">{t.join.appNoTicketTitle}</p>
+          <p className="mt-1 text-muted">{t.join.appNoTicketBody}</p>
         </div>
       )}
 
@@ -459,8 +528,46 @@ function Waiting({ api, view, onLeft }: { api: Api; view: TicketView; onLeft: ()
         )}
       </div>
 
+      <CopyTicketLink officeId={api.officeId} ticketId={view.ticket.id} />
+
       <LeaveButton api={api} ticketId={view.ticket.id} onLeft={onLeft} />
     </div>
+  );
+}
+
+/** The ticket's own address, to keep or open on another device. */
+function CopyTicketLink({ officeId, ticketId }: { officeId: string; ticketId: string }) {
+  const { t } = useI18n();
+  const link = `${window.location.origin}${ticketPath(officeId, ticketId)}`;
+  const [result, setResult] = useState<'copied' | 'failed' | null>(null);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(link);
+      setResult('copied');
+    } catch {
+      setResult('failed');
+    }
+  };
+  return (
+    <div className="rounded-md bg-white p-4 text-muted">
+      <button type="button" className="btn-outline w-full" onClick={copy}>
+        <LinkIcon /> {t.ticket.copyLink}
+      </button>
+      <p role="status" className={result ? 'mt-2 text-ink' : 'sr-only'}>
+        {result === 'copied' ? t.ticket.linkCopied : result === 'failed' ? t.ticket.copyFailed : ''}
+      </p>
+      {result === 'failed' && <p className="mt-1 select-all break-all font-mono text-sm text-ink">{link}</p>}
+      <p className="mt-2 text-sm">{t.ticket.linkHint}</p>
+    </div>
+  );
+}
+
+function LinkIcon() {
+  return (
+    <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M10 13a5 5 0 0 0 7.07 0l3-3a5 5 0 0 0-7.07-7.07l-1.5 1.5" />
+      <path d="M14 11a5 5 0 0 0-7.07 0l-3 3a5 5 0 0 0 7.07 7.07l1.5-1.5" />
+    </svg>
   );
 }
 

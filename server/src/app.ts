@@ -93,6 +93,20 @@ const subscribeSchema = z.discriminatedUnion('role', [
 ]);
 type Subscription = z.infer<typeof subscribeSchema>;
 
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/**
+ * Resident pages an installed Home Screen app may open on: the join page, a
+ * ticket (/o/:office/t/:ticket) or an appointment. Anything else → null.
+ */
+export function residentStart(p: string): { officeId: string } | null {
+  const m = /^\/o\/([^/]+)\/(join|t\/([^/]+)|appointment\/([^/]+))$/.exec(p);
+  if (!m || !isOfficeId(m[1])) return null;
+  const id = m[3] ?? m[4];
+  if (id !== undefined && !UUID.test(id)) return null;
+  return { officeId: m[1] };
+}
+
 const roomFor = (s: Subscription) => (s.role === 'ticket' ? `${s.officeId}:ticket:${s.ticketId}` : `${s.officeId}:${s.role}`);
 const officeOfRoom = (room: string) => (room.includes(':') ? room.slice(0, room.indexOf(':')) : null);
 
@@ -117,6 +131,11 @@ export function createApp(opts: AppOptions) {
   app.disable('x-powered-by');
   if (opts.trustProxy !== undefined) app.set('trust proxy', opts.trustProxy);
   app.use(express.json({ limit: '32kb' }));
+  // Ticket and appointment addresses are capability URLs: never send them to other sites as a Referer.
+  app.use((_req, res, next) => {
+    res.setHeader('Referrer-Policy', 'no-referrer');
+    next();
+  });
 
   // Request ids and one structured log line per request. Paths are redacted:
   // ticket and appointment ids in URLs are secrets, and query strings are dropped.
@@ -260,17 +279,15 @@ export function createApp(opts: AppOptions) {
   });
 
   // Per-office web app manifest, so "Add to Home Screen" opens this office. iOS
-  // gives installed apps their own storage, so start_url may carry the
-  // resident's ticket (or appointment) to pick up where they were. Without a
-  // valid start, start_url is left out so it defaults to the page's own URL:
-  // iOS reads the manifest once at page load (before joining) and saves the
-  // address bar URL, which the join page keeps in sync with the ticket.
+  // gives installed apps their own storage, so start_url carries the resident's
+  // ticket (or appointment): the installed app opens on it. The server writes
+  // the manifest link into the page itself (see residentStart), because Safari
+  // reads the manifest once, at page load, and ignores later changes.
   office.get('/manifest.webmanifest', (req, res) => {
     const { officeId, config } = ctx(res);
     const root = `/o/${officeId}`;
     const start = String(req.query.start ?? '');
-    const uuid = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
-    const valid = new RegExp(`^${root}/(join(\\?ticket=${uuid})?|appointment/${uuid})$`);
+    const valid = residentStart(start);
     res
       .type('application/manifest+json')
       .set('Cache-Control', 'no-store')
@@ -280,7 +297,7 @@ export function createApp(opts: AppOptions) {
           name: config.name,
           short_name: config.name.length > 14 ? 'Queue' : config.name,
           description: `Join the line at ${config.name} and get an alert when it’s your turn.`,
-          start_url: valid.test(start) ? start : undefined,
+          start_url: valid && valid.officeId === officeId ? start : `${root}/join`,
           scope: '/',
           display: 'standalone',
           background_color: '#f0f0f0',
@@ -500,9 +517,22 @@ export function createApp(opts: AppOptions) {
         },
       }),
     );
+    // Old ticket links (alerts already sent, icons already installed) → the ticket's own address.
+    app.get('/o/:officeId/join', (req, res, next) => {
+      const ticket = String(req.query.ticket ?? '');
+      if (!isOfficeId(req.params.officeId) || !UUID.test(ticket)) return next();
+      res.redirect(302, `/o/${req.params.officeId}/t/${ticket}`);
+    });
+    const indexHtml = fs.readFileSync(path.join(webDist, 'index.html'), 'utf8');
     app.use((req, res, next) => {
       if (req.method !== 'GET' || req.path.startsWith('/socket.io')) return next();
-      res.sendFile(path.join(webDist, 'index.html'));
+      // Resident pages get their office's manifest in the HTML, so it is right
+      // from the first byte, whenever the browser decides to read it.
+      const start = residentStart(req.path);
+      const html = start
+        ? indexHtml.replace('</head>', `    <link rel="manifest" href="/api/o/${start.officeId}/manifest.webmanifest?start=${encodeURIComponent(req.path)}" />\n  </head>`)
+        : indexHtml;
+      res.set('Cache-Control', 'no-cache').type('html').send(html);
     });
   }
 

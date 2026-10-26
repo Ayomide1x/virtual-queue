@@ -366,7 +366,7 @@ describe('error reporting', () => {
     // Thrown from a script in the page itself (like the app's own code), not from the test harness.
     await page.addScriptTag({ content: "setTimeout(() => { throw new Error('test crash'); }, 0);" });
     const body = JSON.parse((await report).postData() ?? '{}');
-    expect(body).toMatchObject({ kind: 'error', message: expect.stringContaining('test crash'), url: `/o/${officeId}/join` });
+    expect(body).toMatchObject({ kind: 'error', message: expect.stringContaining('test crash'), url: `/o/${officeId}/t/:id` });
     expect(JSON.stringify(body)).not.toContain(me.id);
     await page.browserContext().close();
   });

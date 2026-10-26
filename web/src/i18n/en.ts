@@ -65,6 +65,8 @@ export const en = {
     noLongerActive: 'Your previous ticket is no longer active. You can join the line again below.',
     left: 'You have left the line.',
     findingTicket: 'Finding your ticket…',
+    appNoTicketTitle: 'Already joined in Safari?',
+    appNoTicketBody: 'This Home Screen app keeps its tickets separate from Safari. If you joined in Safari, open your ticket there and add it to your Home Screen from that page.',
   },
 
   ticket: {
@@ -85,6 +87,10 @@ export const en = {
     keepOpenStrong: 'Keep this page open',
     keepOpenRest: ' (or turn on alerts above). Your phone will chime when it’s your turn. You can safely refresh — your ticket is saved on this device.',
     soundOn: 'Turn on sound alerts',
+    copyLink: 'Copy ticket link',
+    linkCopied: 'Link copied.',
+    copyFailed: 'Couldn’t copy. Your ticket link:',
+    linkHint: 'Anyone with this link can see your place and leave the line for you.',
     leave: 'Leave the line',
     leaveQuestion: 'Leave the line?',
     leaveBody: 'You’ll lose your place and need a new ticket to rejoin.',
