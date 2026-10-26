@@ -36,4 +36,4 @@ console.log('\nNext:');
 console.log('  • Set VAPID_SUBJECT to a mailto: address you read (push services contact it about problems).');
 console.log('  • Optional: set RESEND_API_KEY (free at resend.com) for email alerts; without it emails are only logged.');
 console.log('  • Restart the server (or: docker compose up -d --build).');
-console.log('  • Web push only works over HTTPS (or localhost). See README → Alerts.');
+console.log('  • Web push only works over HTTPS (or localhost). See docs/alerts.md.');

@@ -173,7 +173,7 @@ function Created({ office, onAnother }: { office: CreatedOffice; onAnother: () =
 
       {!reachable && (
         <p className="mt-4 rounded-md border-l-8 border-warning bg-warning-light p-4">
-          These links use <strong>localhost</strong>, which phones can’t reach. Set <code className="font-mono">PUBLIC_URL</code> on the server (see the README).
+          These links use <strong>localhost</strong>, which phones can’t reach. Set <code className="font-mono">PUBLIC_URL</code> on the server (see docs/configuration.md).
         </p>
       )}
 
