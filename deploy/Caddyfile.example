@@ -2,8 +2,11 @@
 # automatic HTTPS certificate (Let's Encrypt). Caddy handles WebSockets on its
 # own, so the queue's live updates need no extra settings.
 #
-# Install as /etc/caddy/Caddyfile, then: sudo systemctl reload caddy
-# Check first with: caddy validate --config /etc/caddy/Caddyfile
+# Caddy in Docker (deploy/README.md, step 6): save as ~/caddy/Caddyfile, then
+#   cd ~/caddy && docker compose exec -w /etc/caddy caddy caddy reload
+# Caddy installed on the host: save as /etc/caddy/Caddyfile, then
+#   sudo systemctl reload caddy
+# Check first with: caddy validate --config /etc/caddy/Caddyfile (in Docker: docker compose run --rm caddy caddy validate --config /etc/caddy/Caddyfile)
 {
 	# Certificate expiry notices go here. Use an address you read.
 	email you@example.com
@@ -23,5 +26,8 @@ queue.example.com {
 # Compose file publishes on 127.0.0.1.
 market.example.com {
 	encode zstd gzip
-	reverse_proxy 127.0.0.1:8000
+	reverse_proxy 127.0.0.1:8080 {
+		# The dashboard streams live updates over Server-Sent Events: flush every write, never buffer.
+		flush_interval -1
+	}
 }

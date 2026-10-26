@@ -9,11 +9,11 @@ domains with automatic HTTPS:
                  internet :80 / :443
                          │
                  ┌───────▼────────┐   one Caddy for the whole server
-                 │     Caddy      │   (certificates, HTTPS, WebSockets)
+                 │     Caddy      │   (certificates, HTTPS, WebSockets, SSE)
                  └──┬──────────┬──┘
    queue.example.com│          │market.example.com
                     ▼          ▼
-         127.0.0.1:3210    127.0.0.1:8000
+         127.0.0.1:3210    127.0.0.1:8080
          Virtual Queue     market pipeline
          (+ its Redis,     (its own Compose project)
           not exposed)
@@ -25,7 +25,9 @@ domains with automatic HTTPS:
 - Only Caddy listens on ports 80 and 443.
 - Redis has no published port at all. Only the app can reach it, on the Compose project's private network.
 
-Both images (`node:22-alpine`, `redis:7-alpine`, `caddy`) are multi-arch, so they run natively on ARM. CI builds this app's image for `linux/arm64` on every push.
+Caddy runs in its own small Compose project, so the server ends up with three: this app, the market pipeline, and Caddy. A host-installed Caddy works too ([below](#caddy-installed-on-the-host-instead)).
+
+All the images (`node:22-alpine`, `redis:7-alpine`, `caddy:2`) are multi-arch, so they run natively on ARM. CI builds this app's image for `linux/arm64` on every push.
 
 ## 1. DNS
 
@@ -55,7 +57,7 @@ Oracle blocks traffic in **two places**, and you need to open both.
 
 Optionally add UDP `443` for HTTP/3. If your instance uses a **Network Security Group** instead, add the same rules there.
 
-**Don't** add rules for 3210, 8000 or 6379. Those ports stay private.
+**Don't** add rules for 3210, 8080 or 6379. Those ports stay private.
 
 ### b) The server's own firewall
 
@@ -77,23 +79,15 @@ sudo ufw allow 443/tcp
 
 > **Why bind to 127.0.0.1?** Ports Docker publishes on `0.0.0.0` skip the host firewall (Docker writes its own iptables rules). A port published as `127.0.0.1:3210` can only be reached from the server itself, whatever the firewall says. That's why both apps' Compose files must publish to `127.0.0.1`.
 
-## 3. Install Docker and Caddy
+## 3. Install Docker
 
 ```bash
-# Docker (official convenience script; supports arm64)
+# Docker (official convenience script; supports arm64, and starts Docker on boot)
 curl -fsSL https://get.docker.com | sudo sh
 sudo usermod -aG docker $USER    # log out and back in
-
-# Caddy (official apt repository; supports arm64)
-sudo apt install -y debian-keyring debian-archive-keyring apt-transport-https curl
-curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | sudo gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
-curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | sudo tee /etc/apt/sources.list.d/caddy-stable.list
-sudo apt update && sudo apt install -y caddy
 ```
 
-The apt package runs Caddy as a systemd service that starts on boot.
-
-If you'd rather run Caddy in a container, see [Caddy in Docker](#caddy-in-docker-instead) below.
+Caddy itself runs as a container (step 6), so there's nothing else to install.
 
 ## 4. Run Virtual Queue
 
@@ -131,7 +125,7 @@ The Compose project is named `virtual-queue`, so its containers, network and Red
 ## 5. The market pipeline
 
 In the *other* app's `docker-compose.yml`:
-- Publish its web port on 127.0.0.1 only, e.g. `ports: ["127.0.0.1:8000:8000"]`.
+- Publish its web port on 127.0.0.1 only, e.g. `ports: ["127.0.0.1:8080:8080"]`.
 - Remove any proxy service of its own that binds 80 or 443.
 
 Check nothing else holds 80 or 443:
@@ -140,11 +134,30 @@ Check nothing else holds 80 or 443:
 sudo ss -tlnp | grep -E ':(80|443)\s'    # should show only caddy
 ```
 
-## 6. Configure Caddy for both sites
+## 6. Run Caddy for both sites
 
-Copy [`Caddyfile.example`](Caddyfile.example) to `/etc/caddy/Caddyfile`, then replace:
+Caddy gets its own folder and Compose project, outside both apps. It uses the host's network, so `127.0.0.1:3210` and `127.0.0.1:8080` mean the host, and it binds 80 and 443 on the host directly:
+
+```yaml
+# ~/caddy/docker-compose.yml
+name: caddy
+services:
+  caddy:
+    image: caddy:2
+    network_mode: host          # sees both apps on 127.0.0.1; binds 80/443 on the host
+    restart: unless-stopped     # comes back after a reboot, like the two apps
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data        # certificates: keep this volume
+      - caddy-config:/config
+volumes:
+  caddy-data:
+  caddy-config:
+```
+
+Copy [`Caddyfile.example`](Caddyfile.example) to `~/caddy/Caddyfile`, then replace:
 - the domains with yours
-- `8000` with the pipeline's port
+- `8080` with the pipeline's port, if it differs
 - the `email` with an address you read
 
 ```caddyfile
@@ -162,20 +175,32 @@ queue.example.com {
 
 market.example.com {
 	encode zstd gzip
-	reverse_proxy 127.0.0.1:8000
+	reverse_proxy 127.0.0.1:8080 {
+		# The dashboard streams live updates over Server-Sent Events: flush every write, never buffer.
+		flush_interval -1
+	}
 }
 ```
 
+**Why `flush_interval -1`:** Caddy only skips buffering on its own when it recognizes a response as a stream, such as a `text/event-stream` content type or an unknown length. With `-1` it never buffers this upstream at all, so the pipeline's live updates arrive as they're sent, whatever headers it uses.
+
 ```bash
-caddy validate --config /etc/caddy/Caddyfile
-sudo systemctl reload caddy
-journalctl -u caddy -f        # watch it get both certificates
+cd ~/caddy
+docker compose run --rm caddy caddy validate --config /etc/caddy/Caddyfile
+docker compose up -d
+docker compose logs -f caddy      # watch it get both certificates
+```
+
+After editing the Caddyfile:
+
+```bash
+docker compose exec -w /etc/caddy caddy caddy reload
 ```
 
 Caddy:
 - gets and renews Let's Encrypt certificates for both domains
 - redirects HTTP to HTTPS
-- passes WebSockets (the queue's live updates) through on its own
+- passes WebSockets (the queue's live updates) and Server-Sent Events (the pipeline's) through
 - adds `X-Forwarded-For` and `X-Forwarded-Proto`
 
 Check from anywhere:
@@ -207,41 +232,40 @@ Queue state lives in Redis (with an append-only file on a volume), so nobody los
 | Health | `GET /health` gives `200 {"status":"ok"}` when the app and Redis are fine, or `503` with `redis_unavailable` / `shutting_down`. Caddy uses it (`health_uri`), and so does Docker's healthcheck. Point an uptime monitor at `https://queue.example.com/health`. |
 | Logs | `docker compose logs -f app`. One JSON object per line (`time`, `level`, `msg`, `requestId`, …). Secret ticket ids and query strings are stripped from paths. Docker rotates them (5 × 10 MB). |
 | Errors | Set `SENTRY_DSN` (Sentry or GlitchTip) in `.env` and restart. Server errors, crashed background jobs and browser crashes are reported, without personal data. |
-| Caddy | `journalctl -u caddy`. Add a `log` block to a site for access logs. |
+| Caddy | In Docker: `cd ~/caddy && docker compose logs -f caddy`. Installed on the host: `journalctl -u caddy -f`. Add a `log` block to a site for access logs. |
 
-## Caddy in Docker instead
+## Caddy installed on the host instead
 
-If you'd rather not install Caddy on the host, run it as its own Compose project. Give it the host's network so `127.0.0.1:3210` and `127.0.0.1:8000` mean the host, as they do for a host-installed Caddy:
-
-```yaml
-# ~/caddy/docker-compose.yml (its own folder, not inside either app)
-name: caddy
-services:
-  caddy:
-    image: caddy:2
-    network_mode: host          # sees both apps on 127.0.0.1; binds 80/443 on the host
-    restart: unless-stopped
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy-data:/data        # certificates: keep this volume
-      - caddy-config:/config
-volumes:
-  caddy-data:
-  caddy-config:
-```
+If you'd rather run Caddy as a system service than a container, install it from Caddy's official apt repository (supports arm64). Skip the `~/caddy` Compose project in step 6:
 
 ```bash
-cd ~/caddy && docker compose up -d
-docker compose exec caddy caddy reload --config /etc/caddy/Caddyfile   # after editing the Caddyfile
+sudo apt install -y debian-keyring debian-archive-keyring apt-transport-https curl
+curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | sudo gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | sudo tee /etc/apt/sources.list.d/caddy-stable.list
+sudo apt update && sudo apt install -y caddy
+```
+
+The package runs Caddy as a systemd service that starts on boot. Put the same Caddyfile at `/etc/caddy/Caddyfile`, then:
+
+```bash
+caddy validate --config /etc/caddy/Caddyfile
+sudo systemctl reload caddy
+journalctl -u caddy -f        # watch it get both certificates
 ```
 
 The firewall steps are the same. Only ports 80 and 443 are opened.
 
-## Checked before writing this
+## Verified
 
-- This exact Caddyfile layout ran locally, using Caddy's local certificates on test ports:
-  - one Caddy in front of the app on `127.0.0.1:3210` and a stand-in second app on `127.0.0.1:8000`
+**In production.** This guide has been followed end to end on a real Oracle Cloud Ampere (ARM) instance, with Caddy in Docker:
+- Both apps are live on their own domains, each with a Let's Encrypt certificate.
+- A cold reboot brought all three Compose projects (this app, the market pipeline and Caddy) back with no manual steps.
+- The iptables rules for ports 80 and 443 survived the reboot.
+
+**Locally, before that:**
+- One Caddy in front of the app on `127.0.0.1:3210` and a stand-in second app ran using Caddy's local certificates on test ports:
   - each domain reached the right app, HTTP redirected to HTTPS, and the app wasn't reachable on the machine's LAN address
   - a 300-resident load test ran *through Caddy* (HTTPS and WebSockets) with no errors: 95% of requests finished within 6 ms, and 95% of calls reached phones within 33 ms
 - The app keeps idle connections open longer than Caddy's upstream keep-alive (2 minutes). Otherwise a request can land on a connection the app is just closing, which shows up as an occasional 502.
 - Both `linux/arm64` and `linux/amd64` images were built, started, passed `/health`, and shut down cleanly on `docker stop`.
+- Server-Sent Events through Caddy 2.11.7 (the `caddy:2` image), with `encode zstd gzip` and `flush_interval -1`, arrived one event at a time.
