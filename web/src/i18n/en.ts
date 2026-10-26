@@ -143,7 +143,7 @@ export const en = {
     emailMe: 'Email me',
     saving: 'Saving…',
     emailPrivacy: 'Only used for these alerts. We delete it as soon as your visit ends.',
-    demoMode: ' (Demo mode: emails are written to the server log instead of being sent.)',
+    previewMode: ' (Preview mode: emails are written to the server log instead of sent.)',
   },
 
   ios: {

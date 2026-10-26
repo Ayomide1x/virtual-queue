@@ -51,7 +51,7 @@ TEST_REDIS_URL=redis://127.0.0.1:6399 npm test
   - **Recording:** every live queue action writes the right event (served, no-show, leaving while waiting or while called, appointment check-in, priority) under a hashed id. History survives a queue reset and has its expiry refreshed.
   - **Seeding:**
     - realistic shape: busy Mondays, a mid-morning peak, a sensible no-show rate, and differing counter speeds
-    - idempotent, never overwriting real days, and run through the real demo seed
+    - idempotent, never overwriting real days, and run through the real sample-data seed
   - **API:** 401/403, range validation, and CSV headers and file names.
 - Browser tests: the dashboard is checked with axe on desktop, and on a phone with every number table open. A behaviour test changes the date range, downloads a CSV, and checks the charts fit a phone screen.
 

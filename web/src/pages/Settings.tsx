@@ -389,7 +389,7 @@ function SettingsScreen({ officeId, staffKey, meta }: { officeId: string; staffK
           <CopyField label="Resident join link" value={links.join} />
         </Section>
 
-        <DemoData api={api} />
+        <SampleData api={api} />
       </main>
 
       {form && (
@@ -465,7 +465,7 @@ function RemoveButton({ label, onClick, disabled }: { label: string; onClick: ()
   );
 }
 
-function DemoData({ api }: { api: ReturnType<typeof officeApi> }) {
+function SampleData({ api }: { api: ReturnType<typeof officeApi> }) {
   const [confirm, setConfirm] = useState<'seed' | 'reset' | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<{ kind: 'success' | 'error'; text: string } | null>(null);
@@ -483,7 +483,7 @@ function DemoData({ api }: { api: ReturnType<typeof officeApi> }) {
     }
   };
   return (
-    <Section title="Demo data" description="Fill the lines with sample residents and a morning of history, for demos and training. This replaces everyone currently in line.">
+    <Section title="Sample data" description="Fill the lines with sample residents and a morning of history, for trying it out or training staff. This replaces everyone currently in line.">
       <div className="flex flex-wrap items-center gap-3">
         {confirm ? (
           <>

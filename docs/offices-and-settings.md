@@ -16,6 +16,6 @@ Staff open **Settings** from the console. Changes apply to every open screen imm
 - **Services:** add, rename or remove services, and set each one's ticket letter (unique) and default service time, which is used for wait estimates until real data exists. Renaming keeps people in line. A service can't be removed while anyone is waiting in it or being served.
 - **Counters:** add, rename or remove. Names like "Window A" appear on the display and in residents' alerts. A counter can't be removed while it's serving someone.
 - **Opening hours:** per weekday, optional. Outside opening hours the join page shows "The line is closed — We open again Monday at 9:00 AM" and the display shows a banner. Staff can still serve people already in line. Pages update by themselves when the office opens or closes.
-- **Demo data:** *Fill with sample residents* or *Clear all queues*.
+- **Sample data:** *Fill with sample residents* or *Clear all queues*.
 
-New offices start with three services (Driver's License, Vehicle Registration, ID Card), four counters, and opening hours **switched off**, so a demo works at any time of day.
+New offices start with three services (Driver's License, Vehicle Registration, ID Card), four counters, and opening hours **switched off**, so a new office can be tried at any time of day.

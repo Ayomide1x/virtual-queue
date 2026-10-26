@@ -175,7 +175,7 @@ function EmailForm({ onSubmit, busy, logOnly }: { onSubmit: (email: string) => v
       </div>
       <p id={`${id}-privacy`} className="text-sm text-muted">
         {t.alerts.emailPrivacy}
-        {logOnly && t.alerts.demoMode}
+        {logOnly && t.alerts.previewMode}
       </p>
     </form>
   );

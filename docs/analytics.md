@@ -27,11 +27,11 @@ Each office has a dashboard at `/o/:officeId/analytics`, linked from the staff c
 - Each event stores its time, the service, the counter, the ticket number, the kind (walk-in or appointment) and any priority reason.
 - Tickets are identified by a hash of their id ("visit"), never the secret id itself.
 - The dashboard reads only these lists, never the live queue's keys. A 90-day report over about 16,000 tickets takes around 100 ms.
-- Clearing the queues (**Reset**, or loading demo data) keeps the history.
+- Clearing the queues (**Reset**, or loading sample residents) keeps the history.
 
 **Retention:** an active office keeps `ANALYTICS_RETENTION_DAYS` (default 90) of history. Older days stop being refreshed and expire, and everything goes when the office expires.
 
-**Demo history:** *Create an office with sample data*, the staff console's demo tools and `npm run office -- seed <id>` all fill the last 60 days with simulated traffic:
+**Sample history:** *Create an office with sample data*, the staff console's *Sample data* panel and `npm run office -- seed <id>` all fill the last 60 days with simulated traffic:
 - Mondays are busiest, with a mid-morning rush and a lunch dip, shorter Saturdays and closed Sundays (or your opening hours, if set).
 - Counters work at different speeds, and people are served first come, first served.
 - A few people give up when the wait gets long, and about 7% are no-shows.

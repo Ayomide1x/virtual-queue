@@ -16,11 +16,11 @@ npm run setup:alerts        # creates VAPID keys in .env (keeps existing ones; -
 Then edit `.env`:
 
 - `VAPID_SUBJECT`: a `mailto:` address you read. Push services use it to contact you.
-- `RESEND_API_KEY` and `EMAIL_FROM`: optional, for real email through Resend's free tier. **Without a key, emails are written to the server log instead**, with the address masked.
+- `RESEND_API_KEY` and `EMAIL_FROM`: optional, for real email through Resend's free tier. **Without a key, emails are written to the server log instead**, with the address masked, and the alerts card tells residents it's in *Preview mode*.
 
 Restart the server, or run `docker compose up -d --build`. Compose reads `.env`. The server prints which channels are active at startup.
 
-**Web push needs HTTPS.** Browsers only allow it on `https://` or `localhost`. Over plain `http://192.168.x.x`, phones are offered email instead. For a demo, a free tunnel works:
+**Web push needs HTTPS.** Browsers only allow it on `https://` or `localhost`. Over plain `http://192.168.x.x`, phones are offered email instead. To test on real phones without your own domain, a free tunnel works:
 
 ```bash
 brew install cloudflared                                  # or see Cloudflare's docs for Linux/Windows
@@ -46,12 +46,23 @@ How a resident's ticket survives the move to the Home Screen, and why ticket lin
 
 ## How it works
 
-```
-queue mutation ──► PUBLISH office event ──► scan (debounced)  ──ENQUEUE_ALERT (Lua)──►  vq:alerts:jobs (sorted set by run time)
-     (never waits on alerts)                "≤3 ahead?" "called?"   HSETNX dedupe              │
-                                                                                     worker: CLAIM_JOBS (Lua, with lease)
-                                                                                       ├─ push  → web-push (VAPID) → FCM / Mozilla / Apple
-                                                                                       └─ email → Resend API (or log)
+```mermaid
+flowchart TD
+    M["Queue change<br/>never waits on alerts"]
+    SC["Scan, debounced<br/>3 or fewer ahead? called?"]
+    E["ENQUEUE_ALERT (Lua)<br/>HSETNX: queued only once"]
+    J[("vq:alerts:jobs<br/>sorted by run time")]
+    W["Worker: CLAIM_JOBS (Lua)<br/>takes a lease on each job"]
+    PU["Push: web-push (VAPID)<br/>FCM · Mozilla · Apple"]
+    EM["Email: Resend API<br/>or the server log"]
+
+    M -- "PUBLISH office event" --> SC
+    SC --> E
+    E --> J
+    J --> W
+    W --> PU
+    W --> EM
+    W -. "failed: retry with backoff" .-> J
 ```
 
 - **Never blocks the queue.** Queue operations only publish an event, which they already did. Scanning, sending and retrying all happen in the background worker. Each send has a 15 s timeout, so a hung push service only delays that one alert.

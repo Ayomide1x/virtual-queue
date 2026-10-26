@@ -127,7 +127,7 @@ function CreateForm({ onCreated }: { onCreated: (o: CreatedOffice) => void }) {
         <input type="checkbox" checked={seed} onChange={(e) => setSeed(e.target.checked)} className="mt-1 h-5 w-5 accent-primary" />
         <span>
           <span className="block font-semibold">Fill with sample residents</span>
-          <span className="block text-sm text-muted">For demos: starts with people waiting and a morning of history.</span>
+          <span className="block text-sm text-muted">Starts with people already in line and a morning of history.</span>
         </span>
       </label>
       {error && (

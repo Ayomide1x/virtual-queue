@@ -6,7 +6,7 @@
 ./scripts/up.sh      # sets PUBLIC_URL to http://<your LAN IP>:3000 and your time zone, then docker compose up --build
 ```
 
-Open <http://localhost:3000>, click **Create an office** (tick *Fill with sample residents* for a demo), and use the links it gives you. Or create one from the terminal:
+Open <http://localhost:3000>, click **Create an office** (tick *Fill with sample residents* to start with people in line), and use the links it gives you. Or create one from the terminal:
 
 ```bash
 docker compose exec app node server/dist/cli.js create --name "Riverside DMV" --seed

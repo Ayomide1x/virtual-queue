@@ -351,7 +351,7 @@ function Console({ api, officeId, counter, state }: { api: Api; officeId: string
           ))}
         </div>
 
-        <DemoControls api={api} officeId={officeId} onDone={(text) => setFeedback({ kind: 'success', text, at: Date.now() })} />
+        <SampleDataControls api={api} officeId={officeId} onDone={(text) => setFeedback({ kind: 'success', text, at: Date.now() })} />
       </section>
     </main>
   );
@@ -588,7 +588,7 @@ function AllCounters({ counters, mine, now }: { counters: CounterState[]; mine: 
   );
 }
 
-function DemoControls({ api, officeId, onDone }: { api: Api; officeId: string; onDone: (msg: string) => void }) {
+function SampleDataControls({ api, officeId, onDone }: { api: Api; officeId: string; onDone: (msg: string) => void }) {
   const [confirm, setConfirm] = useState<'seed' | 'reset' | null>(null);
   const [busy, setBusy] = useState(false);
   const run = async () => {
@@ -606,7 +606,7 @@ function DemoControls({ api, officeId, onDone }: { api: Api; officeId: string; o
   };
   return (
     <details className="rounded-lg border border-dashed border-muted-light bg-white/60 p-4 text-sm">
-      <summary className="cursor-pointer font-semibold text-muted">Demo tools</summary>
+      <summary className="cursor-pointer font-semibold text-muted">Sample data</summary>
       <div className="mt-3 flex flex-wrap items-center gap-3">
         {confirm ? (
           <>

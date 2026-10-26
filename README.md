@@ -11,7 +11,7 @@ A real-time virtual queue for government offices such as a DMV or city services.
 | Ticket | `/o/:officeId/t/:ticketId` | Public (secret link): your place in line; the iPhone Home Screen app opens here |
 | Lobby display | `/o/:officeId/display` | Public: Now Serving, recently called, QR code to this office's join page |
 | Staff console | `/o/:officeId/staff` | **Staff key:** Call Next / Served / No-Show / Recall, pause lines, stats |
-| Settings | `/o/:officeId/settings` | **Staff key:** name, services, counters, opening hours, time zone, appointments, demo data |
+| Settings | `/o/:officeId/settings` | **Staff key:** name, services, counters, opening hours, time zone, appointments, sample data |
 | Book | `/o/:officeId/book` | Public: book an appointment slot |
 | Appointment | `/o/:officeId/appointment/:id` | Public (secret link): confirmation, check-in, cancel |
 | Day view | `/o/:officeId/appointments` | **Staff key:** each day's appointments, check in or cancel on someone's behalf |
@@ -19,22 +19,25 @@ A real-time virtual queue for government offices such as a DMV or city services.
 
 ## Architecture
 
-```
-┌──────────── Browser (React + Vite + Tailwind) ────────────┐
-│  /o/:id/join      /o/:id/staff      /o/:id/display  …     │
-│        │ REST actions (fetch)    ▲ live state (Socket.IO) │
-└────────┼─────────────────────────┼────────────────────────┘
-         ▼                         │
-┌──────────── Node server (Express + Socket.IO) ────────────┐
-│ /api/o/:id/* ─► office lookup (404) ─► staff key (401/403)│
-│   ─► QueueStore(office config) ─(one Lua script)──►       │
-│                 │ PUBLISH vq:o:<id>:events                │
-│ PSUBSCRIBE ◄────┘  → per-office debounced broadcast:      │
-│   <id>:staff (full) · <id>:lobby (numbers only)           │
-│   <id>:ticket:<uuid> (each resident's own position)       │
-└──────────────────────────────┬────────────────────────────┘
-                               ▼
-                 Redis (AOF persistence, Docker volume)
+```mermaid
+flowchart TD
+    B["Browsers<br/>resident phones<br/>staff console · lobby TV"]
+    S["Node server<br/>Express + Socket.IO"]
+    L["One Lua script per change<br/>join · call next · served"]
+    R[("Redis<br/>all queue state")]
+    D["Debounced broadcast<br/>per office"]
+    ST["Staff room<br/>full state"]
+    LO["Lobby room<br/>numbers only"]
+    TK["Ticket rooms<br/>each resident's position"]
+
+    B -- "REST action" --> S
+    S -- "runs atomically" --> L
+    L --> R
+    S -. "PUBLISH office event" .-> R
+    R -. "pub/sub to every server" .-> D
+    D -- "Socket.IO" --> ST
+    D -- "Socket.IO" --> LO
+    D -- "Socket.IO" --> TK
 ```
 
 All queue state lives in Redis and the Node process is stateless. Redis keys, sync, isolation and the project layout are in [docs/architecture.md](docs/architecture.md).
@@ -70,17 +73,8 @@ Open <http://localhost:3000> and click **Create an office**. Phones on the same 
 | [Alerts](docs/alerts.md) | web push and email setup, tunnels, what we learned on real phones, the alert worker |
 | [iPhone Home Screen](docs/ios-home-screen.md) | keeping the ticket in a separate storage container, ticket links as capability URLs |
 | [Languages](docs/languages.md) | English and Spanish, alerts and announcements in the resident's language, adding a language |
-| [Analytics](docs/analytics.md) | the dashboard, definitions, event recording, retention, demo history |
+| [Analytics](docs/analytics.md) | the dashboard, definitions, event recording, retention, sample history |
 | [Monitoring](docs/monitoring.md) | structured logs, `/health`, error tracking, graceful shutdown |
 | [Configuration](docs/configuration.md) | every environment variable |
 | [Development](docs/development.md) | Docker and local runs, CI |
-| [Limitations](docs/limitations.md) | the full list |
-
-## Demo-scope limitations
-
-- **Staff access:** one shared key per office, with no individual accounts, audit log or key rotation.
-- **Opening hours:** one window per day, with no overnight hours or holidays.
-- **Alerts:** push and email only, with no SMS. Web push needs HTTPS, and on iPhone it needs the site added to the Home Screen.
-- **Languages:** staff pages are English-only, and the Spanish text hasn't had a professional review.
-
-The full list, including upgrade notes, is in [docs/limitations.md](docs/limitations.md).
+| [Scope](docs/scope.md) | what's covered, what isn't, and what a production deployment would add |

@@ -149,7 +149,7 @@ export const es: Messages = {
     emailMe: 'Enviarme correo',
     saving: 'Guardando…',
     emailPrivacy: 'Solo se usa para estas alertas. Lo borramos en cuanto termine su visita.',
-    demoMode: ' (Modo de demostración: los correos se escriben en el registro del servidor en lugar de enviarse).',
+    previewMode: ' (Modo de vista previa: los correos se escriben en el registro del servidor en lugar de enviarse).',
   },
 
   ios: {

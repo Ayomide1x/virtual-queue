@@ -1,21 +1,32 @@
 # Architecture
 
-```
-┌──────────── Browser (React + Vite + Tailwind) ────────────┐
-│  /o/:id/join      /o/:id/staff      /o/:id/display  …     │
-│        │ REST actions (fetch)    ▲ live state (Socket.IO) │
-└────────┼─────────────────────────┼────────────────────────┘
-         ▼                         │
-┌──────────── Node server (Express + Socket.IO) ────────────┐
-│ /api/o/:id/* ─► office lookup (404) ─► staff key (401/403)│
-│   ─► QueueStore(office config) ─(one Lua script)──►       │
-│                 │ PUBLISH vq:o:<id>:events                │
-│ PSUBSCRIBE ◄────┘  → per-office debounced broadcast:      │
-│   <id>:staff (full) · <id>:lobby (numbers only)           │
-│   <id>:ticket:<uuid> (each resident's own position)       │
-└──────────────────────────────┬────────────────────────────┘
-                               ▼
-                 Redis (AOF persistence, Docker volume)
+```mermaid
+flowchart TD
+    B["Browser<br/>React + Vite + Tailwind"]
+    O["Office lookup"]
+    K["Staff key check<br/>staff routes only"]
+    N404["404 office_not_found"]
+    N401["401 missing key<br/>403 wrong key"]
+    Q["QueueStore<br/>with the office's config"]
+    L["One Lua script"]
+    R[("Redis<br/>AOF on a Docker volume")]
+    PS["PSUBSCRIBE vq:o:*:events<br/>debounced, per office"]
+    ST["&lt;id&gt;:staff<br/>full state"]
+    LO["&lt;id&gt;:lobby<br/>numbers only"]
+    TK["&lt;id&gt;:ticket:&lt;uuid&gt;<br/>each resident's position"]
+
+    B -- "REST: /api/o/:id/*" --> O
+    O -- "unknown office" --> N404
+    O --> K
+    K -- "missing or wrong" --> N401
+    K -- ok --> Q
+    Q -- "runs atomically" --> L
+    L --> R
+    Q -. "PUBLISH vq:o:&lt;id&gt;:events" .-> R
+    R -. "pub/sub" .-> PS
+    PS -- "Socket.IO" --> ST
+    PS -- "Socket.IO" --> LO
+    PS -- "Socket.IO" --> TK
 ```
 
 - **All queue state lives in Redis**, and the Node process is stateless. Restarting the server (or Redis, thanks to AOF) doesn't lose the queue.
@@ -76,7 +87,7 @@ server/src/
   app.ts          REST API + Socket.IO rooms + broadcast
   seed.ts         sample residents for any office
   analytics.ts    dashboard calculations, CSV export, event history reads
-  history.ts      simulated past days for demos
+  history.ts      simulated past days (sample history)
   cli.ts          create/seed offices from the terminal
   alerts/         service.ts (opt-in, scan, job queue & worker) · senders.ts (web push, Resend, log)
   setupAlerts.ts  generates VAPID keys into .env
